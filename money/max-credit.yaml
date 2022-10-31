@@ -1,0 +1,284 @@
+starterNode: webhook
+nodes:
+  webhook:
+    type: webhook
+    parameters:
+      path: /max-credit
+      method: post
+      validation:
+        queryParameters:
+          employmentId:
+            type: string
+            required: true
+        body:
+          type: object
+          properties:
+            consignableMargin:
+              type: number
+            iof:
+              type: number
+            fee:
+              type: number
+          required:
+            - consignableMargin
+            - iof
+            - fee
+      next: set-ctx-constants
+  set-ctx-constants:
+    type: function
+    parameters:
+      code: |-
+        $.ctx.HTTP_REQUEST_TIMEOUT = 5000
+        const base39 = {
+          baseUrl: $.secrets.base39BaseUrl
+        }
+        $.ctx.base39 =  base39
+      next: find-employment
+  find-employment:
+    type: http-request
+    parameters:
+      ignoreSSLCertificateVerification: true
+      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
+      method: GET
+      headers:
+        "Content-Type": application/json
+        "accept": "application/json"
+        "x-api-key": "{{ $.secrets.base39ApiKey }}"
+      url: "{{ $.ctx.base39.baseUrl }}/employments/{{ $.nodes.webhook[0].output.queryParameters.employmentId }}"
+      next: find-company
+  find-company:
+    type: http-request
+    parameters:
+      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
+      method: GET
+      headers:
+        "Content-Type": application/json
+        "accept": "application/json"
+        "x-api-key": "{{ $.secrets.base39ApiKey }}"
+      url: '{{ $.ctx.base39.baseUrl }}/companies/{{ $.nodes."find-employment"[0].output.responseData.company }}'
+      next: find-open-loans
+  find-open-loans:
+    type: http-request
+    parameters:
+      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
+      method: GET
+      headers:
+        "Content-Type": application/json
+        "accept": "application/json"
+        "x-api-key": "{{ $.secrets.base39ApiKey }}"
+      queryParameters:
+        employment: "{{ $.nodes.webhook[0].output.queryParameters.employmentId }}"
+        status: open
+        limit: 100
+        starting_after: '{{ $.nodes."find-open-loans"[-1].output.responseData.data[-1].id }}'
+      url: "{{ $.ctx.base39.baseUrl }}/loans"
+      next: find-open-loans-check-pagination
+  find-open-loans-check-pagination:
+    type: conditional
+    parameters:
+      conditions:
+        - next: find-open-loans
+          expressions:
+            - leftValue: '{{ $.nodes."find-open-loans"[-1].output.responseData.hasMore }}'
+              operation: equal
+              rightValue: true
+      default: find-disbursed-loans
+  find-disbursed-loans:
+    type: http-request
+    parameters:
+      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
+      method: GET
+      headers:
+        "Content-Type": application/json
+        "accept": "application/json"
+        "x-api-key": "{{ $.secrets.base39ApiKey }}"
+      queryParameters:
+        employment: "{{ $.nodes.webhook[0].output.queryParameters.employmentId }}"
+        status: disbursed
+        limit: 100
+        starting_after: '{{ $.nodes."find-disbursed-loans"[-1].output.responseData.data[-1].id }}'
+      url: "{{ $.ctx.base39.baseUrl }}/loans"
+      next: find-disbursed-loans-check-pagination
+  find-disbursed-loans-check-pagination:
+    type: conditional
+    parameters:
+      conditions:
+        - next: find-disbursed-loans
+          expressions:
+            - leftValue: '{{ $.nodes."find-open-loans"[-1].output.responseData.hasMore }}'
+              operation: equal
+              rightValue: true
+      default: merge-loans
+  merge-loans:
+    type: function
+    parameters:
+      code: |
+        const findDisbursedLoans = $.nodes["find-disbursed-loans"]
+        const findOpenLoans = $.nodes["find-open-loans"]
+
+        const openedLoans = []
+        const disbursedLoans = []
+
+        findDisbursedLoans.forEach(execution => {
+          disbursedLoans.push(...execution.output.responseData.data)
+        })
+
+        findOpenLoans.forEach(execution => {
+          openedLoans.push(...execution.output.responseData.data)
+        })
+
+        return {
+          loansIds: [
+            ...openedLoans.map(loan => loan.id),
+            ...disbursedLoans.map(loan => loan.id),
+          ],
+          openedLoans,
+          disbursedLoans
+        }
+      next: find-loans-installments
+  find-loans-installments:
+    type: loop
+    parameters:
+      items: '{{ $.nodes."merge-loans"[0].output.loansIds }}'
+      starterNode: find-installments
+      concurrency: 10
+      next: sum-loans
+  find-installments:
+    type: http-request
+    parameters:
+      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
+      method: GET
+      headers:
+        "Content-Type": application/json
+        "accept": "application/json"
+        "x-api-key": "{{ $.secrets.base39ApiKey }}"
+      queryParameters:
+        limit: 100
+        starting_after: '{{ $.nodes."find-installments"[-1].output.responseData.data[-1].id }}'
+      url: "{{ $.ctx.base39.baseUrl }}/loans/{{ $.flow.loop.item }}/installments"
+      next: find-installments-check-pagination
+  find-installments-check-pagination:
+    type: conditional
+    parameters:
+      conditions:
+        - next: find-installments
+          expressions:
+            - leftValue: '{{ $.nodes."find-installments"[-1].output.responseData.hasMore }}'
+              operation: equal
+              rightValue: true
+  sum-loans:
+    type: function
+    parameters:
+      code: |
+        const disbursedLoans = $.nodes["merge-loans"][0].output.disbursedLoans
+        const openedLoans = $.nodes["merge-loans"][0].output.openedLoans
+        const findInstallmentExecutions = $.nodes["find-installments"]
+
+        const loans = [
+          ...disbursedLoans,
+          ...openedLoans
+        ]
+
+         function sumInstallments(acc, loan) {
+          return acc + (!!loan.installments.data[0]?.totalAmount ? loan.installments.data[0].totalAmount : 0)
+        }
+
+        function sumTotalAmount(acc, installment) {
+          return acc + installment.totalAmount
+        }
+
+        function sumInstallmentsTotalAmount(acc, execution) {
+          return acc + execution.output.responseData.data.reduce(sumTotalAmount, 0)
+        }       
+
+        const totalAmount = findInstallmentExecutions.reduce(sumInstallmentsTotalAmount, 0)
+        const totalInstallments = loans.reduce(sumInstallments, 0)
+        const totalDisbursedLoans = disbursedLoans.length
+
+        return {
+          totalInstallments,
+          totalAmount,
+          totalDisbursedLoans
+        }
+      next: calculate-loop
+  calculate-loop:
+    type: loop
+    parameters:
+      items:
+        - withEnsurance: true
+        - withEnsurance: false
+      starterNode: calculate-max-installment
+      concurrency: 10
+      next: webhook-response
+  calculate-max-installment:
+    type: function
+    parameters:
+      code: |
+        const maxInstallmentReduction = $.nodes["sum-loans"][0].output.totalInstallments
+        const netSalary = $.nodes["find-employment"][0].output.responseData.netSalary
+        const limitPerInstallment = $.nodes["find-employment"][0].output.responseData.limitPerInstallment
+
+        const estimatedMaxInstallment = netSalary * $.nodes.webhook[0].output.body.consignableMargin
+        const maxInstallment = Math.max(estimatedMaxInstallment - maxInstallmentReduction, 0)
+        return Math.min(maxInstallment, limitPerInstallment)
+      next: calculate-max-credit
+  calculate-max-credit:
+    type: function
+    parameters:
+      code: |
+        const { differenceInDays, startOfDay, addMonths } = require('date-fns')
+        const BigNumber = require('bignumber.js')
+
+        const grossSalary = $.nodes["find-employment"][0].output.responseData.netSalary
+        const iof = $.nodes.webhook[0].output.body.iof
+        const monthlyFee = $.nodes.webhook[0].output.body.fee
+        const maxCreditReduction = $.nodes["sum-loans"][0].output.totalInstallments + grossSalary * iof
+        const limitPerLoan = $.nodes["find-employment"][0].output.responseData.limitPerLoan
+        const maxInstallmentValue = $.nodes["calculate-max-installment"][0].output
+        const withEnsurance = $.flow.loop.item.withEnsurance
+
+        const maxInstallment = withEnsurance ? 12 : 6
+        const firstDueDate = new Date()
+
+        function roundByPlaceValue(maxCredit) {
+          // Extrai a posição/ordem do valor no quadro de ordens (QVL). Se valor = 1115, posição = 3.
+          const place = Math.trunc(Math.round((100 * Math.log(maxCredit)) / Math.log(10)) / 100)
+          // Calcula o valor posicional da ordem. Se 3 enatão 1000.
+          const placeValue = place < 2 ? 1 : Math.pow(10, place - 1)
+          // Retorna a divisão do crédito pelo valor posicional sem o resto.
+          return Math.max(Math.floor(maxCredit / placeValue) * placeValue, 0)
+        }
+
+        let sum = 0
+        for (let i = 0; i < maxInstallment; i++) {
+          const datam = addMonths(startOfDay(new Date(firstDueDate)), i)
+          const diffDays = differenceInDays(datam, startOfDay(new Date()))
+          const monthlyFeeMultiplier = (monthlyFee / 100) + 1
+          const diffInMonths = new BigNumber(diffDays).dividedBy(30)
+          const compondFee = Math.pow(monthlyFeeMultiplier, diffInMonths.toNumber())
+          sum += Math.pow(compondFee, -1)
+        }
+
+        const estimatedMaxCredit = sum * maxInstallmentValue
+        const maxCredit = Math.max(estimatedMaxCredit - maxCreditReduction, 0)
+        return Math.min(roundByPlaceValue(maxCredit), limitPerLoan)
+      next: bind-response
+  bind-response:
+    type: function
+    parameters:
+      code: |
+        const withEnsurance = $.flow.loop.item.withEnsurance
+        const maxInstallment = $.flow.nodes['calculate-max-installment'][0].output
+        const maxCredit = $.flow.nodes['calculate-max-credit'][0].output
+
+        return {
+          withEnsurance,
+          maxInstallment,
+          maxCredit
+        }
+  webhook-response:
+    type: webhook-response
+    parameters:
+      statusCode: 200
+      body:
+        data: '{{ $.nodes."bind-response"[*].output }}'

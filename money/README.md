@@ -94,3 +94,38 @@ Template: [simulation.yaml](./simulation.yaml)
 | qitechPassphrase   | Segredo utilizado para gerar a assinatura do payload à QITech. Pode ser vazio.             |
 | qitechPrivateKey   | Chave privada utilizada para assinar o payload à QITech.                                   |
 | qitechPublicKey    | Chave pública utilizada para verificar e descriptografar a resposta retornada pela QITech. |
+
+
+## Calcular crédito máximo
+
+Tipo: **Webhook**
+
+Template: [max-credit.yaml](./max-credit.yaml)
+
+### Corpo de requisição
+| Nome              | Tipo   | Obrigatório | Descrição             |
+| ----------------- | ------ | ----------- | --------------------- |
+| consignableMargin | Number | &check;     | Margem de consignado. |
+| fee               | Number | &check;     | Taxa de juros.        |
+| iof               | String | &check;     | Taxa do IOF.          |
+
+
+<details>
+    <summary><strong>Exemplo</strong></summary>
+
+```json
+{
+	"consignableMargin": 0.35,
+	"fee": 0.02,
+	"iof": 0.035
+}
+```
+
+</details>
+
+### Segredos
+
+| Nome          | Descrição                    |
+| ------------- | ---------------------------- |
+| base39BaseUrl | URL base das APIs da Base39. |
+| base39ApiKey  | Chave da API da Base39.      |
