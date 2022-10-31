@@ -1,0 +1,571 @@
+starterNode: request
+nodes:
+  request:
+    type: webhook
+    parameters:
+      path: /v1/simulation
+      method: POST
+      validation:
+        headers:
+          authorization:
+            required: true
+        body:
+          type: object
+          properties:
+            numberOfInstallments:
+              type: array
+              minItems: 1
+              maxItems: 6
+              items:
+                type: number
+                minimum: 6
+                maximum: 48
+            amount:
+              type: number
+              minimum: 0
+            customer:
+              type: string
+              pattern: ^cust_\w+$
+          required:
+            - numberOfInstallments
+            - amount
+            - customer
+      next: set-ctx-constants
+  set-ctx-constants:
+    type: function
+    parameters:
+      code: |
+        $.ctx.constants = {
+          MONTHLY_RATE: 0.01,
+          CONTRACT_FINE_RATE: 0.02,
+          MONTHLY_FEE: 0.02,
+          REGISTER_FEE: 10,
+          MARGIN_OF_NET_SALARY: 0.35,
+          MAX_CREDIT_IOF_ADDITIONAL_TAX_PERCENT: 0.0038,
+          HTTP_REQUEST_TIMEOUT: 90000,
+          DECIMAL_PLACES: 3,
+          BIG_NUMBER_CONFIG: {
+            ROUNDING_MODE: 1,
+          }
+        }
+      next: set-ctx-qitech-functions
+  set-ctx-qitech-functions:
+    type: function
+    parameters:
+      code: |
+        const jws = require('jws')
+        const md5 = require('md5')
+        const { v4: uuidV4 } = require('uuid')
+
+        const constants = {
+          apiKey: $.secrets.qitechApiClientKey,
+          privateKey: $.secrets.qitechPrivateKey,
+          publicKey: $.secrets.qitechPublicKey,
+          passphrase: $.secrets.qitechPassphrase,
+          algorithm: 'ES512',
+          encoding: 'utf8',
+        }
+
+        const fixCert = cert => cert.replace(/\\n/g, '\n')
+
+        const createAuthorization = (payload, path, contentType = 'application/json') => {
+          const stringSignValues = {
+            method: 'POST',
+            contentType,
+            currentDate: new Date().toUTCString(),
+            path,
+          }
+          const signatureHeader = createSignature(payload, stringSignValues)
+          return `QIT ${constants.apiKey}:${signatureHeader}`
+        }
+
+        const createSignature = (payload, stringSignValues) => {
+          const stringToSign = [
+            stringSignValues.method,
+            md5(payload),
+            stringSignValues.contentType,
+            stringSignValues.currentDate,
+            stringSignValues.path,
+          ].join('\n')
+
+          const headersToSign = {
+            sub: constants.apiKey,
+            signature: stringToSign,
+          }
+
+          return encrypt(headersToSign)
+        }
+
+        const encrypt = payload => {
+          const signPayload = {
+            ...payload,
+            iat: payload.iat || Math.floor(Date.now() / 1000),
+          }
+
+          const header = Object.assign({
+            alg: constants.algorithm,
+            typ: 'JWT',
+            kid: constants.keyid,
+          })
+
+          return jws.sign({
+            header,
+            payload: signPayload,
+            secret: { key: fixCert(constants.privateKey), passphrase: constants.passphrase },
+            encoding: constants.encoding,
+          })
+        }
+
+        const decodeJwt = encodedJwt => {
+          const decoded = jws.decode(encodedJwt, { complete: true })
+          if (!decoded) {
+            return null
+          }
+          let payload = decoded.payload
+
+          if (typeof payload === 'string') {
+            const obj = JSON.parse(payload)
+            if (obj !== null && typeof obj === 'object') {
+              payload = obj
+            }
+          }
+
+          return {
+            header: decoded.header,
+            payload: payload,
+            signature: decoded.signature,
+          }
+        }
+
+        const decode = encodedResponse => {
+          const isValid = jws.verify(
+            encodedResponse,
+            constants.algorithm,
+            fixCert(constants.publicKey),
+          )
+
+          if (!isValid) {
+            throw new Error('Invalid encoded response!')
+          }
+
+          const decodedToken = decodeJwt(encodedResponse)
+
+          if (!decodedToken) {
+            throw new Error('invalid token')
+          }
+
+          return decodedToken
+        }
+
+        $.ctx.encryptPayload = (requestPayload, path) => {
+          const encodedBody = encrypt(requestPayload)
+
+          return {
+            authorization: createAuthorization(encodedBody, path),
+            encodedBody,
+          }
+        }
+
+        $.ctx.encryptFile = (buffer, requestHeaders) => {
+          const headerToSign = {
+            'content-type': `multipart/form-data; boundary=--------------------------${new Date().getTime()}`
+          }
+
+          const authorization = createAuthorization(buffer, '/upload', headerToSign['content-type'])
+
+          const headers = {
+            ...headerToSign,
+            'API-CLIENT-KEY': $.secrets.qitech_api_client_key,
+            Authorization: authorization
+          }
+
+          return {
+            headers,
+            body: {
+              file: {
+                data: buffer,
+                fileName: `${uuidV4()}.${requestHeaders['content-type'].split('/')[1]}`
+              }
+            }
+          }
+        }
+
+        $.ctx.decodeResponse = qiTechResponse => {
+          const { encoded_body: encodedBody } = qiTechResponse
+          return decode(encodedBody)
+        }
+      next: request-customer-data
+  request-customer-data:
+    type: http-request
+    parameters:
+      method: GET
+      url: "{{ $.secrets.base39BaseUrl }}/v1/customers/{{ $.nodes.request[0].output.body.customer }}"
+      headers:
+        x-api-key: "{{ $.secrets.base39ApiKey }}"
+      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
+      next: request-customer-employment-data
+  request-customer-employment-data:
+    type: http-request
+    parameters:
+      method: GET
+      url: "{{ $.secrets.base39BaseUrl }}/v1/employments"
+      headers:
+        x-api-key: "{{ $.secrets.base39ApiKey }}"
+      queryParameters:
+        document: '{{ $.nodes."request-customer-data"[0].output.responseData.document }}'
+      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
+      next: check-customer-employment-data
+  check-customer-employment-data:
+    type: conditional
+    parameters:
+      conditions:
+        - next: request-max-credit-values
+          expressions:
+            - leftValue: '{{ $.nodes."request-customer-employment-data"[0].output.responseData.data }}'
+              operation: not-empty
+      default: response-error-no-employment
+  request-max-credit-values:
+    type: http-request
+    parameters:
+      method: POST
+      url: "{{ $.secrets.workflowsBaseUrl }}/max-credit"
+      queryParameters:
+        employmentId: '{{ $.nodes."request-customer-employment-data"[0].output.responseData.data[0].id }}'
+      body:
+        consignableMargin: '{{ $.ctx.constants.MARGIN_OF_NET_SALARY }}'
+        fee: '{{ $.ctx.constants.MONTHLY_FEE }}'
+        iof: '{{ $.ctx.constants.MAX_CREDIT_IOF_ADDITIONAL_TAX_PERCENT }}'
+      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
+      next: request-repaid-loans
+  request-repaid-loans:
+    type: http-request
+    parameters:
+      method: GET
+      url: "{{ $.secrets.base39BaseUrl }}/v1/loans"
+      headers:
+        x-api-key: "{{ $.secrets.base39ApiKey }}"
+      queryParameters:
+        status: paid # repaid - Ainda não suportado no Core
+        customer: "{{ $.nodes.request[0].output.queryParameters.customer }}"
+        limit: 100
+        starting_after: '{{ $.nodes."request-repaid-loans"[-1].output.responseData.data[-1].id }}'
+      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
+      next: request-repaid-loans-check-pagination
+  request-repaid-loans-check-pagination:
+    type: conditional
+    parameters:
+      conditions:
+        - next: request-repaid-loans
+          expressions:
+            - leftValue: '{{ $.nodes."request-repaid-loans"[0].output.responseData.hasMore }}'
+              operation: equal
+              rightValue: true
+      default: calculate-dates
+  calculate-dates:
+    type: function
+    parameters:
+      code: |
+        const { startOfMonth, differenceInDays, differenceInMonths } = require('date-fns')
+
+        const employment = $.nodes['request-customer-employment-data'][0].output.responseData.data[0]
+        const { hiredAt } = employment
+
+        const createDate = stringDate => startOfMonth(new Date(stringDate))
+
+        const workingMonths = differenceInMonths(
+          createDate(),
+          createDate(hiredAt),
+        )
+
+        return {
+          workingMonths,
+          firstDueDate: new Date(),
+          disbursementDate: new Date(),
+        }
+      next: set-ctx-credit-policy-list
+  set-ctx-credit-policy-list:
+    type: function
+    parameters:
+      code: |
+        $.ctx.creditPolicies = [
+          {
+           "name": "Default",
+            "rules": [
+              {
+                "maxWorkingMonths": 99,
+                "minWorkingMonths": 1,
+                "salaryQtd": 10000,
+                "minCreditRequest": 1,
+                "monthlyAndRegisterFee": [
+                  {
+                    "insuranceType": "UNINSURED",
+                    "minMonth": 1,
+                    "maxMonth": 60,
+                    "monthlyFee": 1,
+                    "registerFee": 1
+                  }
+                ]
+              }
+            ],
+          },
+          {
+            "name": "Adiantamento Salarial - PT",
+            "rules": [
+              {
+                "maxWorkingMonths": 10,
+                "minWorkingMonths": 1,
+                "salaryQtd": 0.4,
+                "minCreditRequest": 1,
+                "monthlyAndRegisterFee": [
+                  {
+                    "insuranceType": "UNINSURED",
+                    "minMonth": 1,
+                    "maxMonth": 60,
+                    "monthlyFee": 1,
+                    "registerFee": 1
+                  }
+                ]
+              }
+            ],
+          }
+        ]
+      next: filter-credit-policy
+  filter-credit-policy:
+    type: function
+    parameters:
+      code: |
+        const policies = $.ctx.creditPolicies
+        const { workingMonths } = $.nodes["calculate-dates"][0].output
+
+        return policies.filter(policy => {
+          const minWorkingMonthsRule = policy.minWorkingMonths <= workingMonths
+          const maxWorkingMonthsRule = !policy.maxWorkingMonths || policy.maxWorkingMonths >= workingMonths
+          return minWorkingMonthsRule && maxWorkingMonthsRule
+        })
+      next: calculate-insurance
+  calculate-insurance:
+    type: function
+    parameters:
+      code: |
+        return {
+          insuranceType: "UNINSURED",
+          value: 0,
+          fee: 0,
+        };
+      next: simulation-qitech-create-payload
+  simulation-qitech-create-payload:
+    type: function
+    parameters:
+      code: |
+        const { numberOfInstallments, amount } = $.nodes.request[0].output.body;
+        const { firstDueDate, disbursementDate } = $.nodes["calculate-dates"][0].output;
+        const insurance = $.nodes["calculate-insurance"][0].output;
+        const { MONTHLY_RATE, CONTRACT_FINE_RATE, MONTHLY_FEE, REGISTER_FEE } =
+          $.ctx.constants;
+
+        function createRebates() {
+          const rebates = [
+            {
+              amount: REGISTER_FEE,
+              fee_type: "tac",
+              amount_type: "absolute",
+            },
+          ];
+
+          if (insurance.value) {
+            rebates.push({
+              amount: insurance.value,
+              fee_type: "tac_tax_free",
+              amount_type: "absolute",
+              description: "Prêmio de Seguro",
+            });
+          }
+
+          return rebates;
+        }
+
+        const installmentsPayload = numberOfInstallments.map(installmentNumber => ({
+          borrower: {
+            person_type: "natural",
+          },
+          financial: {
+            rebates: createRebates(),
+            monthly_interest_rate: MONTHLY_FEE,
+            fine_configuration: {
+              interest_base: "calendar_days",
+              monthly_rate: MONTHLY_RATE,
+              contract_fine_rate: CONTRACT_FINE_RATE,
+            },
+            number_of_installments: installmentNumber,
+            interest_grace_period: 0,
+            principal_grace_period: 0,
+            disbursement_date: disbursementDate,
+            disbursed_amount: amount,
+            interest_type: "pre_price_days",
+            first_due_date: firstDueDate,
+            credit_operation_type: "ccb",
+          },
+        }));
+
+        return {
+          complex_operation: true,
+          operation_batch: installmentsPayload,
+        };
+      next: simulation-qitech-encrypt-payload
+  simulation-qitech-encrypt-payload:
+    type: function
+    parameters:
+      code: |
+        const requestPayload = $.nodes['simulation-qitech-create-payload'][0].output
+        return $.ctx.encryptPayload(requestPayload, '/debt_simulation')
+      next: simulation-qitech-request-batch
+  simulation-qitech-request-batch:
+    type: http-request
+    parameters:
+      method: POST
+      url: "{{ $.secrets.qitechBaseUrl }}/debt_simulation"
+      headers:
+        API-CLIENT-KEY: "{{$.secrets.qitechApiClientKey}}"
+        Authorization: '{{$.nodes."simulation-qitech-encrypt-payload"[0].output.authorization}}'
+        Accept: application/json
+        Content-Type: application/json
+      body:
+        encoded_body: '{{$.nodes."simulation-qitech-encrypt-payload"[0].output.encodedBody}}'
+      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
+      next: simulation-qitech-decrypt-response
+  simulation-qitech-decrypt-response:
+    type: function
+    parameters:
+      code: |
+        const { responseData } = $.nodes['simulation-qitech-request-batch'][0].output
+        return $.ctx.decodeResponse(responseData)
+      next: simulation-qitech-check-response
+  simulation-qitech-check-response:
+    type: conditional
+    parameters:
+      conditions:
+        - next: create-installments-response
+          operator: AND
+          expressions:
+            - leftValue: '{{$.nodes."simulation-qitech-decrypt-response"[0].output.payload.status}}'
+              operation: greater
+              rightValue: 199
+            - leftValue: '{{$.nodes."simulation-qitech-decrypt-response"[0].output.payload.status}}'
+              operation: less
+              rightValue: 300
+      default: response-error-qitech
+  create-installments-response:
+    type: function
+    parameters:
+      code: |
+        const { v4: uuidV4 } = require("uuid");
+        const BigNumber = require("bignumber.js");
+        BigNumber.set($.ctx.constants.BIG_NUMBER_CONFIG);
+
+        const insurance = $.nodes["calculate-insurance"][0].output;
+        const { REGISTER_FEE } = $.ctx.constants;
+
+        const qitechResponseData =
+          $.nodes["simulation-qitech-decrypt-response"][0].output.payload.data;
+
+        function createAllowed(firstInstallment) {
+          const maxInstallmentValue = new BigNumber($.ctx.maxInstallmentValue);
+
+          if (
+            new BigNumber(firstInstallment.total_amount).isGreaterThan(
+              maxInstallmentValue
+            )
+          ) {
+            return {
+              allowed: false,
+              message: "MAX_INSTALLMENT_VALUE_ERROR",
+              errorValue: maxInstallmentValue,
+            };
+          }
+
+          return {
+            allowed: true,
+          };
+        }
+
+        const calculatePercentageValue = value => {
+          return new BigNumber(value)
+            .multipliedBy(100)
+            .decimalPlaces($.ctx.constants.DECIMAL_PLACES)
+            .toNumber();
+        };
+
+        return qitechResponseData.map(qitechResponse => {
+          const qitechInstallment = qitechResponse.data 
+          const firstInstallment = qitechInstallment.installments[0];
+
+          return {
+            id: uuidV4(),
+            installments: qitechInstallment.installments.length,
+            ...createAllowed(firstInstallment),
+            installmentValue: firstInstallment.total_amount,
+            registerFee: REGISTER_FEE,
+            iofValue: qitechInstallment.iof_amount,
+            totalValue: qitechInstallment.issue_amount,
+            monthlyCET: calculatePercentageValue(qitechInstallment.cet),
+            yearlyCET: calculatePercentageValue(qitechInstallment.annual_cet),
+            monthlyFee: calculatePercentageValue(
+              qitechInstallment.prefixed_interest_rate.monthly_rate
+            ),
+            yearlyFee: calculatePercentageValue(
+              qitechInstallment.prefixed_interest_rate.annual_rate
+            ),
+            daysToIncrease: 0,
+            firstDueDate: firstInstallment.due_date,
+            insuranceValue: insurance.value,
+            insuranceType: insurance.insuranceType,
+            withInsurance: !!insurance.value,
+            insuranceFee: calculatePercentageValue(insurance.fee),
+          };
+        });
+      next: create-simulation-response
+  create-simulation-response:
+    type: function
+    parameters:
+      code: |
+        const { amount } = $.nodes.request[0].output.body;
+        const { disbursementDate } = $.nodes["calculate-dates"][0].output;
+
+        const installmentSimulations = $.nodes["create-installments-response"][0].output
+        const firstInstallment = installmentSimulations[0];
+
+        const fundId = "123456";
+        const acquittanceLoansIds = $.nodes["request-repaid-loans"].flatMap(node =>
+          node.output.responseData.data.map(loan => loan.id)
+        );
+
+        return {
+          amount: amount,
+          firstDueDate: firstInstallment.firstDueDate,
+          daysToIncrease: 0,
+          acquittanceLoans: acquittanceLoansIds,
+          fund: fundId,
+          disbursementDate,
+          installments: installmentSimulations,
+        };
+      next: response
+  response:
+    type: webhook-response
+    parameters:
+      statusCode: 200
+      headers:
+        Content-Type: application/json
+      body: '{{$.nodes."create-simulation-response"[*].output}}'
+  response-error-qitech:
+    type: webhook-response
+    parameters:
+      statusCode: 400
+      headers:
+        Content-Type: application/json
+      body: '{{ $.nodes."simulation-qitech-decrypt-response"[0].output }}'
+  response-error-no-employment:
+    type: webhook-response
+    parameters:
+      statusCode: 400
+      body:
+        message: "No employment found for the given customer."
