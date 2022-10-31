@@ -1,0 +1,183 @@
+starterNode: webhook
+nodes:
+  webhook:
+    type: webhook
+    parameters:
+      path: /request-qitech
+      method: POST
+      next: encrypt-payload
+      validation:
+        body:
+          type: object
+          properties:
+            data:
+              type: object
+            path:
+              type: string
+          required:
+            - data
+            - path
+  encrypt-payload:
+    type: function
+    parameters:
+      code: |
+        const jws = require('jws')
+        const md5 = require('md5')
+
+        const body = $.nodes.webhook[0].output.body.data
+        const path = $.nodes.webhook[0].output.body.path
+
+        const constants = {
+          apiKey: $.secrets.qitechApiClientKey,
+          privateKey: $.secrets.qitechPrivateKey,
+          publicKey: $.secrets.qitechPublicKey,
+          passphrase: $.secrets.qitechPassphrase,
+          algorithm: 'ES512',
+          encoding: 'utf8',
+        }
+
+        const fixCert = cert => cert.replace(/\\n/g, '\n')
+
+        const createAuthorization = (payload, path) => {
+          const stringSignValues = {
+            method: 'POST',
+            contentType: 'application/json',
+            currentDate: new Date().toUTCString(),
+            path,
+          }
+
+          const signatureHeader = createSignature(payload, stringSignValues)
+
+          return `QIT ${constants.apiKey}:${signatureHeader}`
+        }
+
+        const createSignature = (payload, stringSignValues) => {
+          const stringToSign = [
+            stringSignValues.method,
+            md5(payload),
+            stringSignValues.contentType,
+            stringSignValues.currentDate,
+            stringSignValues.path,
+          ].join('\n')
+
+          const headersToSign = {
+            sub: constants.apiKey,
+            signature: stringToSign,
+          }
+
+          return encrypt(headersToSign)
+        }
+
+        const encrypt = payload => {
+          const signPayload = {
+            ...payload,
+            iat: payload.iat || Math.floor(Date.now() / 1000),
+          }
+
+          const header = Object.assign({
+            alg: constants.algorithm,
+            typ: 'JWT',
+            kid: constants.keyid,
+          })
+
+          return jws.sign({
+            header,
+            payload: signPayload,
+            secret: { key: fixCert(constants.privateKey), passphrase: constants.passphrase },
+            encoding: constants.encoding,
+          })
+        }
+
+        const encodedBody = encrypt(body)
+
+        return {
+          authorization: createAuthorization(encodedBody, path),
+          encodedBody,
+        }
+      next: request-qitech
+  request-qitech:
+    type: http-request
+    parameters:
+      timeout: 5000
+      url: "{{ $.secrets.qitechBaseUrl }}{{ $.nodes.webhook[0].output.body.path }}"
+      method: POST
+      headers:
+        API-CLIENT-KEY: "{{$.secrets.qitech_api_client_key}}"
+        Authorization: '{{$.nodes."encrypt-payload"[0].output.authorization}}'
+        Accept: application/json
+        Content-Type: application/json
+      body:
+        encoded_body: '{{$.nodes."encrypt-payload"[0].output.encodedBody}}'
+      next: decrypt
+  decrypt:
+    type: function
+    parameters:
+      code: |
+        const jws = require('jws')
+        const md5 = require('md5')
+
+        const constants = {
+          publicKey: $.secrets.qitechPublicKey,
+          algorithm: 'ES512',
+        }
+
+        const fixCert = cert => cert.replace(/\\n/g, '\n')
+
+        const responseData = $.nodes['request-qitech'][0].output.responseData
+
+        const decodeJwt = encodedJwt => {
+          const decoded = jws.decode(encodedJwt, { complete: true })
+          if (!decoded) {
+            return null
+          }
+          let payload = decoded.payload
+
+          if (typeof payload === 'string') {
+            const obj = JSON.parse(payload)
+            if (obj !== null && typeof obj === 'object') {
+              payload = obj
+            }
+          }
+
+          return {
+            header: decoded.header,
+            payload: payload,
+            signature: decoded.signature,
+          }
+        }
+
+
+        const decode = encodedResponse => {
+          const isValid = jws.verify(
+            encodedResponse,
+            constants.algorithm,
+            fixCert(constants.publicKey),
+          )
+
+          if (!isValid) {
+            throw new Error('Invalid encoded response!')
+          }
+
+          const decodedToken = decodeJwt(encodedResponse)
+
+          if (!decodedToken) {
+            throw new Error('invalid token')
+          }
+
+          return decodedToken
+        }
+
+        const decodeResponse = qiTechResponse => {
+          const { encoded_body: encodedBody } = qiTechResponse
+          return decode(encodedBody)
+        }
+
+        return decodeResponse(responseData)
+      next: webhook-response
+  webhook-response:
+    type: webhook-response
+    parameters:
+      statusCode: 200
+      headers:
+        Content-Type: application/json
+      body: "{{$.nodes.decrypt[0].output.payload.data}}"
