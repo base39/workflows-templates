@@ -219,7 +219,6 @@ Template: [simulation.yaml](./simulation.yaml)
 
 | Nome               | Descrição                                                                                  |
 | ------------------ | ------------------------------------------------------------------------------------------ |
-| workflowsBaseUrl   | URL base do fluxo de cálculo de crédito máximo.                                            |
 | base39BaseUrl      | URL base das APIs da Base39.                                                               |
 | base39ApiKey       | Chave da API da Base39.                                                                    |
 | qitechBaseUrl      | URL base das APIs da QITech.                                                               |

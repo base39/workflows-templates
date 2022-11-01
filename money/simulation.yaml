@@ -1,3 +1,305 @@
+creditPolicies: &creditPoliciesCode |
+  $.ctx.creditPolicies = [
+    {
+      "name": "Default",
+      "maxWorkingMonths": 999,
+      "minWorkingMonths": 1,
+      "salaryQtd": 10000,
+      "minCreditRequest": 1,
+      "monthlyAndRegisterFee": [
+        {
+          "insuranceType": "UNINSURED",
+          "minMonth": 1,
+          "maxMonth": 20,
+          "monthlyFee": 0.7,
+          "registerFee": 5
+        },
+        {
+          "insuranceType": "UNINSURED",
+          "minMonth": 21,
+          "maxMonth": 50,
+          "monthlyFee": 1.0,
+          "registerFee": 10
+        },
+        {
+          "insuranceType": "UNINSURED",
+          "minMonth": 51,
+          "maxMonth": 99,
+          "monthlyFee": 1.5,
+          "registerFee": 15
+        }
+      ],
+    },
+    {
+      "name": "Adiantamento Salarial - PT",
+      "maxWorkingMonths": 10,
+      "minWorkingMonths": 1,
+      "salaryQtd": 0.4,
+      "minCreditRequest": 1,
+      "monthlyAndRegisterFee": [
+        {
+          "insuranceType": "UNINSURED",
+          "minMonth": 1,
+          "maxMonth": 60,
+          "monthlyFee": 1,
+          "registerFee": 1
+        }
+      ]
+    }
+  ]
+
+ctxConstants: &ctxConstantsCode |
+  $.ctx.constants = {
+    MONTHLY_RATE: 0.01,
+    CONTRACT_FINE_RATE: 0.02,
+    HTTP_REQUEST_TIMEOUT: 90000,
+    DECIMAL_PLACES: 3,
+    BIG_NUMBER_CONFIG: {
+      ROUNDING_MODE: 1,
+    },
+    HOLIDAYS: [
+      '2022-11-02',
+      '2022-11-15',
+      '2022-12-25',
+      '2023-01-01',
+      '2023-02-20',
+      '2023-02-21',
+      '2023-04-07',
+      '2023-04-21',
+      '2023-05-01',
+      '2023-06-08',
+      '2023-09-07',
+      '2023-10-12',
+      '2023-11-02',
+      '2023-11-15',
+      '2023-12-25',
+      '2024-01-01',
+      '2024-02-12',
+      '2024-02-13',
+      '2024-03-29',
+      '2024-04-21',
+      '2024-05-01',
+      '2024-05-30',
+      '2024-09-07',
+      '2024-10-12',
+      '2024-11-02',
+      '2024-11-15',
+      '2024-12-25',
+      '2025-01-01',
+      '2025-03-03',
+      '2025-03-04',
+      '2025-04-18',
+      '2025-04-21',
+      '2025-05-01',
+      '2025-06-19',
+      '2025-09-07',
+      '2025-10-12',
+      '2025-11-02',
+      '2025-11-15',
+      '2025-12-25',
+      '2026-01-01',
+      '2026-02-16',
+      '2026-02-17',
+      '2026-04-03',
+      '2026-04-21',
+      '2026-05-01',
+      '2026-06-04',
+      '2026-09-07',
+      '2026-10-12',
+      '2026-11-02',
+      '2026-11-15',
+      '2026-12-25',
+      '2027-01-01',
+      '2027-02-08',
+      '2027-02-09',
+      '2027-03-26',
+      '2027-04-21',
+      '2027-05-01',
+      '2027-05-27',
+      '2027-09-07',
+      '2027-10-12',
+      '2027-11-02',
+      '2027-11-15',
+      '2027-12-25',
+      '2028-01-01',
+      '2028-02-28',
+      '2028-02-29',
+      '2028-04-14',
+      '2028-04-21',
+      '2028-05-01',
+      '2028-06-15',
+      '2028-09-07',
+      '2028-10-12',
+      '2028-11-02',
+      '2028-11-15',
+      '2028-12-25',
+      '2029-01-01',
+      '2029-02-12',
+      '2029-02-13',
+      '2029-03-30',
+      '2029-04-21',
+      '2029-05-01',
+      '2029-05-31',
+      '2029-09-07',
+      '2029-10-12',
+      '2029-11-02',
+      '2029-11-15',
+      '2029-12-25',
+      '2030-01-01',
+      '2030-03-04',
+      '2030-03-05',
+      '2030-04-19',
+      '2030-04-21',
+      '2030-05-01',
+      '2030-06-20',
+      '2030-09-07',
+      '2030-10-12',
+      '2030-11-02',
+      '2030-11-15',
+      '2030-12-25',
+      '2031-01-01',
+      '2031-02-24',
+      '2031-02-25',
+      '2031-04-11',
+      '2031-04-21',
+      '2031-05-01',
+      '2031-06-12',
+      '2031-09-07',
+      '2031-10-12',
+      '2031-11-02',
+      '2031-11-15',
+      '2031-12-25',
+      '2032-01-01',
+      '2032-02-09',
+      '2032-02-10',
+      '2032-03-26',
+      '2032-04-21',
+      '2032-05-01',
+      '2032-05-27',
+      '2032-09-07',
+      '2032-10-12',
+      '2032-11-02',
+      '2032-11-15',
+      '2032-12-25',
+      '2033-01-01',
+      '2033-02-28',
+      '2033-03-01',
+      '2033-04-15',
+      '2033-04-21',
+      '2033-05-01',
+      '2033-06-16',
+      '2033-09-07',
+      '2033-10-12',
+      '2033-11-02',
+      '2033-11-15',
+      '2033-12-25',
+      '2034-01-01',
+      '2034-02-20',
+      '2034-02-21',
+      '2034-04-07',
+      '2034-04-21',
+      '2034-05-01',
+      '2034-06-08',
+      '2034-09-07',
+      '2034-10-12',
+      '2034-11-02',
+      '2034-11-15',
+      '2034-12-25',
+      '2035-01-01',
+      '2035-02-05',
+      '2035-02-06',
+      '2035-03-23',
+      '2035-04-21',
+      '2035-05-01',
+      '2035-05-24',
+      '2035-09-07',
+      '2035-10-12',
+      '2035-11-02',
+      '2035-11-15',
+      '2035-12-25',
+      '2036-01-01',
+      '2036-02-25',
+      '2036-02-26',
+      '2036-04-11',
+      '2036-04-21',
+      '2036-05-01',
+      '2036-06-12',
+      '2036-09-07',
+      '2036-10-12',
+      '2036-11-02',
+      '2036-11-15',
+      '2036-12-25',
+      '2037-01-01',
+      '2037-02-16',
+      '2037-02-17',
+      '2037-04-03',
+      '2037-04-21',
+      '2037-05-01',
+      '2037-06-04',
+      '2037-09-07',
+      '2037-10-12',
+      '2037-11-02',
+      '2037-11-15',
+      '2037-12-25',
+      '2038-01-01',
+      '2038-03-08',
+      '2038-03-09',
+      '2038-04-21',
+      '2038-04-23',
+      '2038-05-01',
+      '2038-06-24',
+      '2038-09-07',
+      '2038-10-12',
+      '2038-11-02',
+      '2038-11-15',
+      '2038-12-25',
+      '2039-01-01',
+      '2039-02-21',
+      '2039-02-22',
+      '2039-04-08',
+      '2039-04-21',
+      '2039-05-01',
+      '2039-06-09',
+      '2039-09-07',
+      '2039-10-12',
+      '2039-11-02',
+      '2039-11-15',
+      '2039-12-25',
+      '2040-01-01',
+      '2040-02-13',
+      '2040-02-14',
+      '2040-03-30',
+      '2040-04-21',
+      '2040-05-01',
+      '2040-05-31',
+      '2040-09-07',
+      '2040-10-12',
+      '2040-11-02',
+      '2040-11-15',
+      '2040-12-25',
+      '2041-01-01',
+      '2041-03-04',
+      '2041-03-05',
+      '2041-04-19',
+      '2041-04-21',
+      '2041-05-01',
+      '2041-06-20',
+      '2041-09-07',
+      '2041-10-12',
+      '2041-11-02',
+      '2041-11-15',
+      '2041-12-25',
+      '2042-01-01',
+      '2042-02-17',
+      '2042-02-18',
+      '2042-04-04',
+      '2042-04-21',
+      '2042-05-01',
+      '2042-06-05',
+      '2042-09-07',
+    ]
+  }
+
 starterNode: request
 nodes:
   request:
@@ -34,20 +336,7 @@ nodes:
   set-ctx-constants:
     type: function
     parameters:
-      code: |
-        $.ctx.constants = {
-          MONTHLY_RATE: 0.01,
-          CONTRACT_FINE_RATE: 0.02,
-          MONTHLY_FEE: 0.02,
-          REGISTER_FEE: 10,
-          MARGIN_OF_NET_SALARY: 0.35,
-          MAX_CREDIT_IOF_ADDITIONAL_TAX_PERCENT: 0.0038,
-          HTTP_REQUEST_TIMEOUT: 90000,
-          DECIMAL_PLACES: 3,
-          BIG_NUMBER_CONFIG: {
-            ROUNDING_MODE: 1,
-          }
-        }
+      code: *ctxConstantsCode
       next: set-ctx-qitech-functions
   set-ctx-qitech-functions:
     type: function
@@ -219,193 +508,169 @@ nodes:
     type: conditional
     parameters:
       conditions:
-        - next: request-max-credit-values
+        - next: response-error-no-employment
           expressions:
             - leftValue: '{{ $.nodes."request-customer-employment-data"[0].output.responseData.data }}'
-              operation: not-empty
-      default: response-error-no-employment
-  request-max-credit-values:
-    type: http-request
+              operation: empty
+      default: set-ctx-employment
+  set-ctx-employment:
+    type: function
     parameters:
-      method: POST
-      url: "{{ $.secrets.workflowsBaseUrl }}/max-credit"
-      queryParameters:
-        employmentId: '{{ $.nodes."request-customer-employment-data"[0].output.responseData.data[0].id }}'
-      body:
-        consignableMargin: '{{ $.ctx.constants.MARGIN_OF_NET_SALARY }}'
-        fee: '{{ $.ctx.constants.MONTHLY_FEE }}'
-        iof: '{{ $.ctx.constants.MAX_CREDIT_IOF_ADDITIONAL_TAX_PERCENT }}'
-      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
-      next: request-repaid-loans
-  request-repaid-loans:
+      code: $.ctx.employment = $.nodes['request-customer-employment-data'][0].output.responseData.data[0]
+      next: request-company-data
+  request-company-data:
     type: http-request
     parameters:
       method: GET
-      url: "{{ $.secrets.base39BaseUrl }}/v1/loans"
+      url: "{{ $.secrets.base39BaseUrl }}/v1/companies/{{ $.ctx.employment.company }}"
       headers:
         x-api-key: "{{ $.secrets.base39ApiKey }}"
-      queryParameters:
-        status: paid # repaid - Ainda não suportado no Core
-        customer: "{{ $.nodes.request[0].output.queryParameters.customer }}"
-        limit: 100
-        starting_after: '{{ $.nodes."request-repaid-loans"[-1].output.responseData.data[-1].id }}'
       timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
-      next: request-repaid-loans-check-pagination
-  request-repaid-loans-check-pagination:
-    type: conditional
-    parameters:
-      conditions:
-        - next: request-repaid-loans
-          expressions:
-            - leftValue: '{{ $.nodes."request-repaid-loans"[0].output.responseData.hasMore }}'
-              operation: equal
-              rightValue: true
-      default: calculate-dates
+      next: calculate-dates
   calculate-dates:
     type: function
     parameters:
       code: |
-        const { startOfMonth, differenceInDays, differenceInMonths } = require('date-fns')
+        const { startOfMonth, differenceInMonths } = require('date-fns')
 
-        const employment = $.nodes['request-customer-employment-data'][0].output.responseData.data[0]
-        const { hiredAt } = employment
+        const { payrollPaymentDay } = $.nodes["request-company-data"][0].output.responseData.settings
+        const { hiredAt } = $.ctx.employment
 
-        const createDate = stringDate => startOfMonth(new Date(stringDate))
+        function createDate(stringDate) {
+          return startOfMonth(stringDate ? new Date(stringDate) : new Date())
+        }
 
-        const workingMonths = differenceInMonths(
-          createDate(),
-          createDate(hiredAt),
-        )
+        function calculateEmployeeWorkingMonths() {
+          return differenceInMonths(
+            createDate(),
+            createDate(hiredAt),
+          )
+        }
+
+        function calculateCompanyFirstDueDate() {
+          const currentDate = createDate()
+          return new Date(currentDate.getFullYear(), currentDate.getMonth() + 2, payrollPaymentDay)
+        }
+
+        function calculateNextBusinessDay() {
+          const date = createDate()
+
+          do {
+            date.setDate(date.getDate() + 1)
+          } while (isHoliday(date) || isWeekend(date))
+
+          return date
+        }
+
+        function isWeekend(date) {
+          return !(date.getDay() % 6)
+        }
+
+        function isHoliday(date) {
+          return $.ctx.constants.HOLIDAYS.includes(formatDate(date))
+        }
+
+        function formatDate(date) {
+          return date.toISOString().split('T')[0]
+        }
 
         return {
-          workingMonths,
-          firstDueDate: new Date(),
-          disbursementDate: new Date(),
+          workingMonths: calculateEmployeeWorkingMonths(),
+          firstDueDate: formatDate(calculateCompanyFirstDueDate()),
+          disbursementDate: formatDate(calculateNextBusinessDay()),
         }
       next: set-ctx-credit-policy-list
   set-ctx-credit-policy-list:
     type: function
     parameters:
-      code: |
-        $.ctx.creditPolicies = [
-          {
-           "name": "Default",
-            "rules": [
-              {
-                "maxWorkingMonths": 99,
-                "minWorkingMonths": 1,
-                "salaryQtd": 10000,
-                "minCreditRequest": 1,
-                "monthlyAndRegisterFee": [
-                  {
-                    "insuranceType": "UNINSURED",
-                    "minMonth": 1,
-                    "maxMonth": 60,
-                    "monthlyFee": 1,
-                    "registerFee": 1
-                  }
-                ]
-              }
-            ],
-          },
-          {
-            "name": "Adiantamento Salarial - PT",
-            "rules": [
-              {
-                "maxWorkingMonths": 10,
-                "minWorkingMonths": 1,
-                "salaryQtd": 0.4,
-                "minCreditRequest": 1,
-                "monthlyAndRegisterFee": [
-                  {
-                    "insuranceType": "UNINSURED",
-                    "minMonth": 1,
-                    "maxMonth": 60,
-                    "monthlyFee": 1,
-                    "registerFee": 1
-                  }
-                ]
-              }
-            ],
-          }
-        ]
-      next: filter-credit-policy
-  filter-credit-policy:
+      code: *creditPoliciesCode
+      next: get-credit-policy
+  get-credit-policy:
     type: function
     parameters:
       code: |
         const policies = $.ctx.creditPolicies
         const { workingMonths } = $.nodes["calculate-dates"][0].output
 
-        return policies.filter(policy => {
+        const applyableCreditPolicies = policies.filter(policy => {
           const minWorkingMonthsRule = policy.minWorkingMonths <= workingMonths
           const maxWorkingMonthsRule = !policy.maxWorkingMonths || policy.maxWorkingMonths >= workingMonths
           return minWorkingMonthsRule && maxWorkingMonthsRule
         })
-      next: calculate-insurance
-  calculate-insurance:
-    type: function
-    parameters:
-      code: |
-        return {
-          insuranceType: "UNINSURED",
-          value: 0,
-          fee: 0,
-        };
+
+        return applyableCreditPolicies.length ? applyableCreditPolicies[0] : null
       next: simulation-qitech-create-payload
   simulation-qitech-create-payload:
     type: function
     parameters:
       code: |
+        const { BigNumber } = require("bignumber.js");
+        BigNumber.set($.ctx.constants.BIG_NUMBER_CONFIG);
+
+        const { MONTHLY_RATE, CONTRACT_FINE_RATE } = $.ctx.constants;
         const { numberOfInstallments, amount } = $.nodes.request[0].output.body;
         const { firstDueDate, disbursementDate } = $.nodes["calculate-dates"][0].output;
-        const insurance = $.nodes["calculate-insurance"][0].output;
-        const { MONTHLY_RATE, CONTRACT_FINE_RATE, MONTHLY_FEE, REGISTER_FEE } =
-          $.ctx.constants;
+        const creditPolicy = $.nodes["get-credit-policy"][0].output;
 
-        function createRebates() {
+        function toPercentageValue(value) {
+          return new BigNumber(value).dividedBy(100).toNumber();
+        }
+
+        function createRebates(registerFee) {
           const rebates = [
             {
-              amount: REGISTER_FEE,
+              amount: registerFee,
               fee_type: "tac",
               amount_type: "absolute",
             },
           ];
 
-          if (insurance.value) {
-            rebates.push({
-              amount: insurance.value,
-              fee_type: "tac_tax_free",
-              amount_type: "absolute",
-              description: "Prêmio de Seguro",
-            });
-          }
-
           return rebates;
         }
 
-        const installmentsPayload = numberOfInstallments.map(installmentNumber => ({
-          borrower: {
-            person_type: "natural",
-          },
-          financial: {
-            rebates: createRebates(),
-            monthly_interest_rate: MONTHLY_FEE,
-            fine_configuration: {
-              interest_base: "calendar_days",
-              monthly_rate: MONTHLY_RATE,
-              contract_fine_rate: CONTRACT_FINE_RATE,
+        function getPolicyFees(installmentNumber) {
+          const applyableRules = creditPolicy.monthlyAndRegisterFee
+            .filter(
+              rule =>
+                rule.minMonth <= installmentNumber && installmentNumber <= rule.maxMonth
+            )
+            .sort((a, b) => b.maxMonth - a.maxMonth);
+
+          if (!applyableRules.length) {
+            throw new Error(
+              `No credit policy applies to ${installmentNumber} installments.`
+            );
+          }
+
+          return applyableRules[0];
+        }
+
+        const installmentsPayload = numberOfInstallments.map(installmentNumber => {
+          const policyFees = getPolicyFees(installmentNumber);
+
+          return {
+            borrower: {
+              person_type: "natural",
             },
-            number_of_installments: installmentNumber,
-            interest_grace_period: 0,
-            principal_grace_period: 0,
-            disbursement_date: disbursementDate,
-            disbursed_amount: amount,
-            interest_type: "pre_price_days",
-            first_due_date: firstDueDate,
-            credit_operation_type: "ccb",
-          },
-        }));
+            financial: {
+              rebates: createRebates(policyFees.registerFee),
+              monthly_interest_rate: toPercentageValue(policyFees.monthlyFee),
+              fine_configuration: {
+                interest_base: "calendar_days",
+                monthly_rate: MONTHLY_RATE,
+                contract_fine_rate: CONTRACT_FINE_RATE,
+              },
+              number_of_installments: installmentNumber,
+              interest_grace_period: 0,
+              principal_grace_period: 0,
+              disbursement_date: disbursementDate,
+              disbursed_amount: amount,
+              interest_type: "pre_price_days",
+              first_due_date: firstDueDate,
+              credit_operation_type: "ccb",
+            },
+          };
+        });
 
         return {
           complex_operation: true,
@@ -462,30 +727,14 @@ nodes:
         const BigNumber = require("bignumber.js");
         BigNumber.set($.ctx.constants.BIG_NUMBER_CONFIG);
 
-        const insurance = $.nodes["calculate-insurance"][0].output;
         const { REGISTER_FEE } = $.ctx.constants;
 
         const qitechResponseData =
           $.nodes["simulation-qitech-decrypt-response"][0].output.payload.data;
 
-        function createAllowed(firstInstallment) {
-          const maxInstallmentValue = new BigNumber($.ctx.maxInstallmentValue);
-
-          if (
-            new BigNumber(firstInstallment.total_amount).isGreaterThan(
-              maxInstallmentValue
-            )
-          ) {
-            return {
-              allowed: false,
-              message: "MAX_INSTALLMENT_VALUE_ERROR",
-              errorValue: maxInstallmentValue,
-            };
-          }
-
-          return {
-            allowed: true,
-          };
+        function isAllowed(installment) {
+          const maxInstallmentValue = new BigNumber($.ctx.employment.limitPerInstallment)
+          return new BigNumber(installment.total_amount).isLessThanOrEqualTo(maxInstallmentValue)
         }
 
         const calculatePercentageValue = value => {
@@ -502,7 +751,7 @@ nodes:
           return {
             id: uuidV4(),
             installments: qitechInstallment.installments.length,
-            ...createAllowed(firstInstallment),
+            allowed: isAllowed(firstInstallment),
             installmentValue: firstInstallment.total_amount,
             registerFee: REGISTER_FEE,
             iofValue: qitechInstallment.iof_amount,
@@ -517,10 +766,7 @@ nodes:
             ),
             daysToIncrease: 0,
             firstDueDate: firstInstallment.due_date,
-            insuranceValue: insurance.value,
-            insuranceType: insurance.insuranceType,
-            withInsurance: !!insurance.value,
-            insuranceFee: calculatePercentageValue(insurance.fee),
+            withInsurance: false,
           };
         });
       next: create-simulation-response
@@ -535,15 +781,12 @@ nodes:
         const firstInstallment = installmentSimulations[0];
 
         const fundId = "123456";
-        const acquittanceLoansIds = $.nodes["request-repaid-loans"].flatMap(node =>
-          node.output.responseData.data.map(loan => loan.id)
-        );
 
         return {
           amount: amount,
           firstDueDate: firstInstallment.firstDueDate,
           daysToIncrease: 0,
-          acquittanceLoans: acquittanceLoansIds,
+          acquittanceLoans: [],
           fund: fundId,
           disbursementDate,
           installments: installmentSimulations,
