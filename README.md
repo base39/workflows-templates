@@ -2,7 +2,7 @@
 
 Projeto de distribuição de Templates de fluxos do Workflows.
 
-[Ver templates](./templates/README.md).
+[Ver templates](./templates).
 
 <br>
 
