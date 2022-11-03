@@ -2,11 +2,7 @@
 
 Projeto de distribuição de Templates de fluxos do Workflows.
 
-<br>
-
-## Templates
-
-- [Money](./money/README.md): Fluxos para cálculo de crédito.
+[Ver templates](./templates/README.md).
 
 <br>
 

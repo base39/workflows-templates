@@ -5,7 +5,7 @@ creditPolicies: &creditPoliciesCode |
       "maxWorkingMonths": 999,
       "minWorkingMonths": 1,
       "salaryQtd": 10000,
-      "minCreditRequest": 1,
+      "minCreditRequest": 100,
       "monthlyAndRegisterFee": [
         {
           "insuranceType": "UNINSURED",
@@ -300,6 +300,11 @@ ctxConstants: &ctxConstantsCode |
     ]
   }
 
+base39ApiHeaders: &base39ApiHeaders
+  Content-Type: application/json
+  Accept: application/json
+  x-api-key: "{{ $.secrets.base39ApiKey }}"
+
 starterNode: request
 nodes:
   request:
@@ -489,8 +494,7 @@ nodes:
     parameters:
       method: GET
       url: "{{ $.secrets.base39BaseUrl }}/v1/customers/{{ $.nodes.request[0].output.body.customer }}"
-      headers:
-        x-api-key: "{{ $.secrets.base39ApiKey }}"
+      headers: *base39ApiHeaders
       timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
       next: request-customer-employment-data
   request-customer-employment-data:
@@ -498,8 +502,7 @@ nodes:
     parameters:
       method: GET
       url: "{{ $.secrets.base39BaseUrl }}/v1/employments"
-      headers:
-        x-api-key: "{{ $.secrets.base39ApiKey }}"
+      headers: *base39ApiHeaders
       queryParameters:
         document: '{{ $.nodes."request-customer-data"[0].output.responseData.document }}'
       timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
@@ -523,8 +526,7 @@ nodes:
     parameters:
       method: GET
       url: "{{ $.secrets.base39BaseUrl }}/v1/companies/{{ $.ctx.employment.company }}"
-      headers:
-        x-api-key: "{{ $.secrets.base39ApiKey }}"
+      headers: *base39ApiHeaders
       timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
       next: calculate-dates
   calculate-dates:
@@ -599,7 +601,21 @@ nodes:
         })
 
         return applyableCreditPolicies.length ? applyableCreditPolicies[0] : null
-      next: simulation-qitech-create-payload
+      next: check-credit-policy
+  check-credit-policy:
+    type: conditional
+    parameters:
+      conditions:
+        - next: response-error-no-credit-policy
+          expressions:
+            - leftValue: '{{ $.nodes."get-credit-policy"[0].output }}'
+              operation: not-present
+        - next: response-error-min-credit-request
+          expressions:
+            - leftValue: "{{ $.nodes.request[0].output.body.amount }}"
+              operation: less
+              rightValue: '{{ $.nodes."get-credit-policy"[0].output.minCreditRequest }}'
+      default: simulation-qitech-create-payload
   simulation-qitech-create-payload:
     type: function
     parameters:
@@ -811,4 +827,21 @@ nodes:
     parameters:
       statusCode: 400
       body:
+        code: EMPLOYMENT_NOT_FOUND
         message: "No employment found for the given customer."
+  response-error-no-credit-policy:
+    type: webhook-response
+    parameters:
+      statusCode: 400
+      body:
+        message: "No credit policy applies for the given employee."
+        code: CREDIT_POLICY_NOT_FOUND
+  response-error-min-credit-request:
+    type: webhook-response
+    parameters:
+      statusCode: 400
+      body:
+        message: "The requested amount is less than the minimum allowed."
+        code: MIN_CREDIT_REQUEST_ERROR
+        details:
+          minCredit: '{{ $.nodes."get-credit-policy"[0].output.minCreditRequest }}'
