@@ -7,7 +7,7 @@ nodes:
       method: post
       validation:
         queryParameters:
-          employmentId:
+          document:
             type: string
             required: true
         body:
@@ -19,6 +19,15 @@ nodes:
               type: number
             fee:
               type: number
+            product:
+              type: object
+              properties:
+                slug:
+                  type: string
+                eligibilitySettings:
+                  type: object
+                metdaData:
+                  type: object
           required:
             - consignableMargin
             - iof
@@ -28,46 +37,58 @@ nodes:
     type: function
     parameters:
       code: |-
+        $.ctx.installments = []
         $.ctx.HTTP_REQUEST_TIMEOUT = 5000
         const base39 = {
           baseUrl: $.secrets.base39BaseUrl
         }
         $.ctx.base39 =  base39
-      next: find-employment
-  find-employment:
+      next: find-customer
+  find-customer:
     type: http-request
     parameters:
-      ignoreSSLCertificateVerification: true
       timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
       method: GET
-      headers:
+      headers: &base39ApiHeader
         "Content-Type": application/json
         "accept": "application/json"
         "x-api-key": "{{ $.secrets.base39ApiKey }}"
-      url: "{{ $.ctx.base39.baseUrl }}/employments/{{ $.nodes.webhook[0].output.queryParameters.employmentId }}"
-      next: find-company
+      url: "{{ $.ctx.base39.baseUrl }}/customers"
+      queryParameters:
+        document: "{{ $.nodes.webhook[0].output.queryParameters.document }}"
+      next: find-employments
+  find-employments:
+    type: http-request
+    parameters:
+      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
+      method: GET
+      headers: *base39ApiHeader
+      url: "{{ $.ctx.base39.baseUrl }}/employments"
+      queryParameters:
+        document: "{{ $.nodes.webhook[0].output.queryParameters.document }}"
+      next: find-companies
+  find-companies:
+    type: loop
+    parameters:
+      items: '{{ $.nodes."find-employments"[0].output.responseData.data[*].company }}'
+      starterNode: find-company
+      concurrency: 10
+      next: find-open-loans
   find-company:
     type: http-request
     parameters:
       timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
       method: GET
-      headers:
-        "Content-Type": application/json
-        "accept": "application/json"
-        "x-api-key": "{{ $.secrets.base39ApiKey }}"
-      url: '{{ $.ctx.base39.baseUrl }}/companies/{{ $.nodes."find-employment"[0].output.responseData.company }}'
-      next: find-open-loans
+      headers: *base39ApiHeader
+      url: "{{ $.ctx.base39.baseUrl }}/companies/{{ $.flow.loop.item }}"
   find-open-loans:
     type: http-request
     parameters:
       timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
       method: GET
-      headers:
-        "Content-Type": application/json
-        "accept": "application/json"
-        "x-api-key": "{{ $.secrets.base39ApiKey }}"
+      headers: *base39ApiHeader
       queryParameters:
-        employment: "{{ $.nodes.webhook[0].output.queryParameters.employmentId }}"
+        customer: '{{ $.nodes."find-customer".output.responseData.data[0].id }}'
         status: open
         limit: 100
         starting_after: '{{ $.nodes."find-open-loans"[-1].output.responseData.data[-1].id }}'
@@ -88,12 +109,9 @@ nodes:
     parameters:
       timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
       method: GET
-      headers:
-        "Content-Type": application/json
-        "accept": "application/json"
-        "x-api-key": "{{ $.secrets.base39ApiKey }}"
+      headers: *base39ApiHeader
       queryParameters:
-        employment: "{{ $.nodes.webhook[0].output.queryParameters.employmentId }}"
+        customer: '{{ $.nodes."find-customer".output.responseData.data[0].id }}'
         status: disbursed
         limit: 100
         starting_after: '{{ $.nodes."find-disbursed-loans"[-1].output.responseData.data[-1].id }}'
@@ -148,10 +166,7 @@ nodes:
     parameters:
       timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
       method: GET
-      headers:
-        "Content-Type": application/json
-        "accept": "application/json"
-        "x-api-key": "{{ $.secrets.base39ApiKey }}"
+      headers: *base39ApiHeader
       queryParameters:
         limit: 100
         starting_after: '{{ $.nodes."find-installments"[-1].output.responseData.data[-1].id }}'
@@ -204,9 +219,7 @@ nodes:
   calculate-loop:
     type: loop
     parameters:
-      items:
-        - withEnsurance: true
-        - withEnsurance: false
+      items: '{{ $.nodes."find-employments"[0].output.responseData.data[*] }}'
       starterNode: calculate-max-installment
       concurrency: 10
       next: webhook-response
@@ -215,8 +228,8 @@ nodes:
     parameters:
       code: |
         const maxInstallmentReduction = $.nodes["sum-loans"][0].output.totalInstallments
-        const netSalary = $.nodes["find-employment"][0].output.responseData.netSalary
-        const limitPerInstallment = $.nodes["find-employment"][0].output.responseData.limitPerInstallment
+        const netSalary = $.flow.loop.item.netSalary
+        const limitPerInstallment = $.flow.loop.item.limitPerInstallment
 
         const estimatedMaxInstallment = netSalary * $.nodes.webhook[0].output.body.consignableMargin
         const maxInstallment = Math.max(estimatedMaxInstallment - maxInstallmentReduction, 0)
@@ -229,28 +242,18 @@ nodes:
         const { differenceInDays, startOfDay, addMonths } = require('date-fns')
         const BigNumber = require('bignumber.js')
 
-        const grossSalary = $.nodes["find-employment"][0].output.responseData.netSalary
+        const grossSalary = $.flow.loop.item.grossSalary
+        const limitPerLoan = $.flow.loop.item.limitPerLoan
         const iof = $.nodes.webhook[0].output.body.iof
         const monthlyFee = $.nodes.webhook[0].output.body.fee
+        const { maxNumberOfInstallments } = $.nodes.webhook[0].output.body.product.metdaData
         const maxCreditReduction = $.nodes["sum-loans"][0].output.totalInstallments + grossSalary * iof
-        const limitPerLoan = $.nodes["find-employment"][0].output.responseData.limitPerLoan
-        const maxInstallmentValue = $.nodes["calculate-max-installment"][0].output
-        const withEnsurance = $.flow.loop.item.withEnsurance
+        const maxInstallmentValue = $.flow.nodes["calculate-max-installment"][0].output
 
-        const maxInstallment = withEnsurance ? 12 : 6
         const firstDueDate = new Date()
 
-        function roundByPlaceValue(maxCredit) {
-          // Extrai a posição/ordem do valor no quadro de ordens (QVL). Se valor = 1115, posição = 3.
-          const place = Math.trunc(Math.round((100 * Math.log(maxCredit)) / Math.log(10)) / 100)
-          // Calcula o valor posicional da ordem. Se 3 enatão 1000.
-          const placeValue = place < 2 ? 1 : Math.pow(10, place - 1)
-          // Retorna a divisão do crédito pelo valor posicional sem o resto.
-          return Math.max(Math.floor(maxCredit / placeValue) * placeValue, 0)
-        }
-
         let sum = 0
-        for (let i = 0; i < maxInstallment; i++) {
+        for (let i = 0; i < maxNumberOfInstallments; i++) {
           const datam = addMonths(startOfDay(new Date(firstDueDate)), i)
           const diffDays = differenceInDays(datam, startOfDay(new Date()))
           const monthlyFeeMultiplier = (monthlyFee / 100) + 1
@@ -261,20 +264,47 @@ nodes:
 
         const estimatedMaxCredit = sum * maxInstallmentValue
         const maxCredit = Math.max(estimatedMaxCredit - maxCreditReduction, 0)
-        return Math.min(roundByPlaceValue(maxCredit), limitPerLoan)
+        return Math.min(maxCredit, limitPerLoan)
+      next: round-values
+  round-values:
+    type: function
+    parameters:
+      code: |
+        const maxInstallment = $.flow.nodes['calculate-max-installment'][0].output
+        const maxCredit = $.flow.nodes['calculate-max-credit'][0].output
+
+        function roundByPlaceValue(maxCredit) {
+          const place = Math.trunc(Math.round((100 * Math.log(maxCredit)) / Math.log(10)) / 100)
+          const placeValue = place < 2 ? 1 : Math.pow(10, place - 1)
+          return Math.max(Math.floor(maxCredit / placeValue) * placeValue, 0)
+        }
+
+        return {
+          maxInstallment: roundByPlaceValue(maxInstallment),
+          maxCredit: roundByPlaceValue(maxCredit)
+        }
       next: bind-response
   bind-response:
     type: function
     parameters:
       code: |
-        const withEnsurance = $.flow.loop.item.withEnsurance
-        const maxInstallment = $.flow.nodes['calculate-max-installment'][0].output
-        const maxCredit = $.flow.nodes['calculate-max-credit'][0].output
+        const { maxCredit, maxInstallment } = $.flow.nodes['round-values'][0].output
+        const { maxNumberOfInstallments, minNumberOfInstallments, minLoanAmount } = $.nodes.webhook[0].output.body.product.metdaData
 
         return {
-          withEnsurance,
-          maxInstallment,
-          maxCredit
+          slug: $.nodes.webhook[0].output.body.product.slug,
+          name: "string",
+          description: "string",
+          maxLoanAmount: maxCredit,
+          minLoanAmount,
+          maxNumberOfInstallments,
+          minNumberOfInstallments,
+          maxInstallmentValue: maxInstallment,
+          minInstallmentValue: maxCredit / maxNumberOfInstallments,
+          customer: $.nodes['find-customer'][0].output.responseData.data[0].id,
+          employment: $.flow.loop.item.id,
+          available: true,
+          metadata: {}
         }
   webhook-response:
     type: webhook-response
