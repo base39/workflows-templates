@@ -3,6 +3,7 @@
 Templates de fluxos para cálculo de crédito.
 
 - [Calcular crédito máximo](#calcular-crédito-máximo)
+  - [Parâmetros](#parâmetros)
   - [Corpo de requisição](#corpo-de-requisição)
   - [Segredos](#segredos)
   - [Resposta](#resposta)
@@ -23,12 +24,18 @@ Tipo: **Webhook**
 
 Template: [max-credit.yaml](./max-credit.yaml)
 
+### Parâmetros
+| Nome     | Tipo   | Obrigatório | Descrição             |
+| -------- | ------ | ----------- | --------------------- |
+| document | String | &check;     | Documento do cliente. |
+
 ### Corpo de requisição
-| Nome              | Tipo   | Obrigatório | Descrição             |
-| ----------------- | ------ | ----------- | --------------------- |
-| consignableMargin | Number | &check;     | Margem de consignado. |
-| fee               | Number | &check;     | Taxa de juros.        |
-| iof               | String | &check;     | Taxa do IOF.          |
+| Nome              | Tipo   | Obrigatório | Descrição               |
+| ----------------- | ------ | ----------- | ----------------------- |
+| consignableMargin | Number | &check;     | Margem de consignado.   |
+| fee               | Number | &check;     | Taxa de juros.          |
+| iof               | String | &check;     | Taxa do IOF.            |
+| product           | Object | &check;     | Informações do produto. |
 
 
 <details>
@@ -38,7 +45,15 @@ Template: [max-credit.yaml](./max-credit.yaml)
 {
 	"consignableMargin": 0.35,
 	"fee": 0.02,
-	"iof": 0.035
+	"iof": 0.035,
+	"product": {
+		"slug": "Consignado",
+		"metdaData": {
+			"maxNumberOfInstallments": 12,
+			"minNumberOfInstallments": 6,
+			"minLoanAmount": 1000
+		}
+	}
 }
 ```
 
@@ -53,9 +68,9 @@ Template: [max-credit.yaml](./max-credit.yaml)
 
 ### Resposta
 
-| Nome | Tipo                | Obrigatório | Descrição                                          |
-| ---- | ------------------- | ----------- | -------------------------------------------------- |
-| data | Array&lt;Object&gt; | &check;     | Lista de cálculos realizados para cada modalidade. |
+| Nome | Tipo                | Obrigatório | Descrição                                                    |
+| ---- | ------------------- | ----------- | ------------------------------------------------------------ |
+| data | Array&lt;Object&gt; | &check;     | Lista de cálculos realizados para cada vínculo empregatício. |
 
 <details>
     <summary><strong>Exemplo</strong></summary>
@@ -64,14 +79,34 @@ Template: [max-credit.yaml](./max-credit.yaml)
 {
 	"data": [
 		{
-			"withEnsurance": true,
-			"maxInstallment": 1300,
-			"maxCredit": 15000
+			"slug": "Consignado",
+			"name": "string",
+			"description": "string",
+			"maxLoanAmount": 54000,
+			"minLoanAmount": 1000,
+			"maxNumberOfInstallments": 12,
+			"minNumberOfInstallments": 6,
+			"maxInstallmentValue": 4600,
+			"minInstallmentValue": 4500,
+			"customer": "cust_635a97e17645c28b241c5910",
+			"employment": "empl_63617dabd48049cdce44246f",
+			"available": true,
+			"metadata": {}
 		},
 		{
-			"withEnsurance": false,
-			"maxInstallment": 1300,
-			"maxCredit": 7500
+			"slug": "Consignado",
+			"name": "string",
+			"description": "string",
+			"maxLoanAmount": 15000,
+			"minLoanAmount": 1000,
+			"maxNumberOfInstallments": 12,
+			"minNumberOfInstallments": 6,
+			"maxInstallmentValue": 1300,
+			"minInstallmentValue": 1250,
+			"customer": "cust_635a97e17645c28b241c5910",
+			"employment": "empl_635a970bb8151436be63e365",
+			"available": true,
+			"metadata": {}
 		}
 	]
 }
