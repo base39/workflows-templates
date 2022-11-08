@@ -8,21 +8,21 @@ creditPolicies: &creditPoliciesCode |
       "minCreditRequest": 100,
       "monthlyAndRegisterFee": [
         {
-          "insuranceType": "UNINSURED",
+          "insuranceType": "OPTIONAL",
           "minMonth": 1,
           "maxMonth": 20,
           "monthlyFee": 0.7,
           "registerFee": 5
         },
         {
-          "insuranceType": "UNINSURED",
+          "insuranceType": "OPTIONAL",
           "minMonth": 21,
           "maxMonth": 50,
           "monthlyFee": 1.0,
           "registerFee": 10
         },
         {
-          "insuranceType": "UNINSURED",
+          "insuranceType": "REQUIRED",
           "minMonth": 51,
           "maxMonth": 99,
           "monthlyFee": 1.5,
@@ -52,6 +52,8 @@ ctxConstants: &ctxConstantsCode |
   $.ctx.constants = {
     MONTHLY_RATE: 0.01,
     CONTRACT_FINE_RATE: 0.02,
+    OPTIONAL_INSURANCE_FEE: 0.045,
+    REQUIRED_INSURANCE_FEE: 0.0179,
     HTTP_REQUEST_TIMEOUT: 90000,
     DECIMAL_PLACES: 3,
     BIG_NUMBER_CONFIG: {
@@ -533,13 +535,13 @@ nodes:
     type: function
     parameters:
       code: |
-        const { startOfMonth, differenceInMonths } = require('date-fns')
+        const { startOfDay, differenceInMonths } = require('date-fns')
 
         const { payrollPaymentDay } = $.nodes["request-company-data"][0].output.responseData.settings
         const { hiredAt } = $.ctx.employment
 
         function createDate(stringDate) {
-          return startOfMonth(stringDate ? new Date(stringDate) : new Date())
+          return startOfDay(stringDate ? new Date(stringDate) : new Date())
         }
 
         function calculateEmployeeWorkingMonths() {
@@ -559,7 +561,7 @@ nodes:
 
           do {
             date.setDate(date.getDate() + 1)
-          } while (isHoliday(date) || isWeekend(date))
+          } while (isWeekend(date) || isHoliday(date))
 
           return date
         }
@@ -615,7 +617,87 @@ nodes:
             - leftValue: "{{ $.nodes.request[0].output.body.amount }}"
               operation: less
               rightValue: '{{ $.nodes."get-credit-policy"[0].output.minCreditRequest }}'
-      default: simulation-qitech-create-payload
+      default: with-and-without-insurance-loop
+  with-and-without-insurance-loop:
+    type: loop
+    parameters:
+      items:
+        - withInsurance: true
+        - withInsurance: false
+      concurrency: 2
+      starterNode: simulation-qitech-loop-items
+      next: response
+  simulation-qitech-loop-items:
+    type: function
+    parameters:
+      code: |
+        const { numberOfInstallments } = $.nodes.request[0].output.body
+        return numberOfInstallments.map(installmentsNumber => ({
+          installmentsNumber,
+          withInsurance: $.flow.loop.item.withInsurance
+        }))
+      next: simulation-qitech-loop
+  simulation-qitech-loop:
+    type: loop
+    parameters:
+      items: '{{ $.flow.nodes."simulation-qitech-loop-items"[0].output }}'
+      concurrency: 5
+      starterNode: simulation-qitech-insurance-get-policy-rules
+      next: create-simulation-response
+  simulation-qitech-insurance-get-policy-rules:
+    type: function
+    parameters:
+      code: |
+        const { installmentsNumber } = $.flow.loop.item
+        const creditPolicy = $.nodes["get-credit-policy"][0].output;
+
+        const applyableRules = creditPolicy.monthlyAndRegisterFee
+          .filter(
+            rule =>
+              rule.minMonth <= installmentsNumber && installmentsNumber <= rule.maxMonth
+          )
+          .sort((a, b) => b.maxMonth - a.maxMonth);
+
+        if (!applyableRules.length) {
+          throw new Error(
+            `No credit policy applies to ${installmentsNumber} installments.`
+          );
+        }
+
+        return applyableRules[0];
+      next: simulation-qitech-insurance-calculate-insurance
+  simulation-qitech-insurance-calculate-insurance:
+    type: function
+    parameters:
+      code: |
+        const { BigNumber } = require("bignumber.js");
+        BigNumber.set($.ctx.constants.BIG_NUMBER_CONFIG);
+
+        const { amount } = $.nodes.request[0].output.body;
+        const { withInsurance } = $.flow.loop.item
+        const { insuranceType } = $.flow.nodes["simulation-qitech-insurance-get-policy-rules"][0].output
+
+        let fee = 0
+        let optional = false
+
+        if (insuranceType === 'REQUIRED') {
+          fee = $.ctx.constants.REQUIRED_INSURANCE_FEE
+        } else if (insuranceType === 'OPTIONAL' && withInsurance) {
+          fee = $.ctx.constants.OPTIONAL_INSURANCE_FEE
+          optional = true
+        }
+
+        const value = new BigNumber(amount)
+          .times(fee)
+          .decimalPlaces($.ctx.constants.DECIMAL_PLACES)
+          .toNumber()
+
+        return {
+          fee,
+          value,
+          optional
+        }
+      next: simulation-qitech-create-payload
   simulation-qitech-create-payload:
     type: function
     parameters:
@@ -623,14 +705,11 @@ nodes:
         const { BigNumber } = require("bignumber.js");
         BigNumber.set($.ctx.constants.BIG_NUMBER_CONFIG);
 
-        const { MONTHLY_RATE, CONTRACT_FINE_RATE } = $.ctx.constants;
-        const { numberOfInstallments, amount } = $.nodes.request[0].output.body;
+        const { installmentsNumber } = $.flow.loop.item
+        const { amount } = $.nodes.request[0].output.body;
         const { firstDueDate, disbursementDate } = $.nodes["calculate-dates"][0].output;
-        const creditPolicy = $.nodes["get-credit-policy"][0].output;
-
-        function toPercentageValue(value) {
-          return new BigNumber(value).dividedBy(100).toNumber();
-        }
+        const policyRules = $.flow.nodes["simulation-qitech-insurance-get-policy-rules"][0].output
+        const insurance = $.flow.nodes["simulation-qitech-insurance-calculate-insurance"][0].output
 
         function createRebates(registerFee) {
           const rebates = [
@@ -641,100 +720,88 @@ nodes:
             },
           ];
 
+          if (insurance.optional) {
+            rebates.push({
+              amount: insurance.value,
+              fee_type: 'tac_tax_free',
+              amount_type: 'absolute',
+              description: 'Prêmio de Seguro',
+            })
+          }
+
           return rebates;
         }
 
-        function getPolicyFees(installmentNumber) {
-          const applyableRules = creditPolicy.monthlyAndRegisterFee
-            .filter(
-              rule =>
-                rule.minMonth <= installmentNumber && installmentNumber <= rule.maxMonth
-            )
-            .sort((a, b) => b.maxMonth - a.maxMonth);
-
-          if (!applyableRules.length) {
-            throw new Error(
-              `No credit policy applies to ${installmentNumber} installments.`
-            );
-          }
-
-          return applyableRules[0];
+        function toPercentageValue(value) {
+          return new BigNumber(value).dividedBy(100).toNumber();
         }
 
-        const installmentsPayload = numberOfInstallments.map(installmentNumber => {
-          const policyFees = getPolicyFees(installmentNumber);
-
-          return {
-            borrower: {
-              person_type: "natural",
-            },
-            financial: {
-              rebates: createRebates(policyFees.registerFee),
-              monthly_interest_rate: toPercentageValue(policyFees.monthlyFee),
-              fine_configuration: {
-                interest_base: "calendar_days",
-                monthly_rate: MONTHLY_RATE,
-                contract_fine_rate: CONTRACT_FINE_RATE,
-              },
-              number_of_installments: installmentNumber,
-              interest_grace_period: 0,
-              principal_grace_period: 0,
-              disbursement_date: disbursementDate,
-              disbursed_amount: amount,
-              interest_type: "pre_price_days",
-              first_due_date: firstDueDate,
-              credit_operation_type: "ccb",
-            },
-          };
-        });
-
         return {
-          complex_operation: true,
-          operation_batch: installmentsPayload,
+          borrower: {
+            person_type: "natural",
+          },
+          financial: {
+            rebates: createRebates(policyRules.registerFee, insurance),
+            monthly_interest_rate: toPercentageValue(policyRules.monthlyFee),
+            fine_configuration: {
+              interest_base: "calendar_days",
+              monthly_rate: $.ctx.constants.MONTHLY_RATE,
+              contract_fine_rate: $.ctx.constants.CONTRACT_FINE_RATE,
+            },
+            number_of_installments: installmentsNumber,
+            interest_grace_period: 0,
+            principal_grace_period: 0,
+            disbursement_date: disbursementDate,
+            disbursed_amount: amount,
+            interest_type: "pre_price_days",
+            first_due_date: firstDueDate,
+            credit_operation_type: "ccb",
+          },
         };
       next: simulation-qitech-encrypt-payload
   simulation-qitech-encrypt-payload:
     type: function
     parameters:
       code: |
-        const requestPayload = $.nodes['simulation-qitech-create-payload'][0].output
+        const requestPayload = $.flow.nodes['simulation-qitech-create-payload'][0].output
         return $.ctx.encryptPayload(requestPayload, '/debt_simulation')
-      next: simulation-qitech-request-batch
-  simulation-qitech-request-batch:
+      next: simulation-qitech-request
+  simulation-qitech-request:
     type: http-request
     parameters:
       method: POST
       url: "{{ $.secrets.qitechBaseUrl }}/debt_simulation"
       headers:
         API-CLIENT-KEY: "{{$.secrets.qitechApiClientKey}}"
-        Authorization: '{{$.nodes."simulation-qitech-encrypt-payload"[0].output.authorization}}'
+        Authorization: '{{$.flow.nodes."simulation-qitech-encrypt-payload"[0].output.authorization}}'
         Accept: application/json
         Content-Type: application/json
       body:
-        encoded_body: '{{$.nodes."simulation-qitech-encrypt-payload"[0].output.encodedBody}}'
+        encoded_body: '{{$.flow.nodes."simulation-qitech-encrypt-payload"[0].output.encodedBody}}'
       timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
+      ignoreResponseCode: true
       next: simulation-qitech-decrypt-response
   simulation-qitech-decrypt-response:
     type: function
     parameters:
       code: |
-        const { responseData } = $.nodes['simulation-qitech-request-batch'][0].output
-        return $.ctx.decodeResponse(responseData)
+        const { responseData } = $.flow.nodes['simulation-qitech-request'][0].output
+        return $.ctx.decodeResponse(responseData).payload
       next: simulation-qitech-check-response
   simulation-qitech-check-response:
     type: conditional
     parameters:
       conditions:
         - next: create-installments-response
-          operator: AND
           expressions:
-            - leftValue: '{{$.nodes."simulation-qitech-decrypt-response"[0].output.payload.status}}'
-              operation: greater
-              rightValue: 199
-            - leftValue: '{{$.nodes."simulation-qitech-decrypt-response"[0].output.payload.status}}'
-              operation: less
-              rightValue: 300
-      default: response-error-qitech
+            - leftValue: '{{$.flow.nodes."simulation-qitech-decrypt-response"[0].output.status}}'
+              operation: equal
+              rightValue: finished
+      default: simulation-qitech-error-response
+  simulation-qitech-error-response:
+    type: function
+    parameters:
+      code: throw new Error(`Error at simulation of installment=${$.flow.loop.item.installmentsNumber}, withInsurance=${$.flow.loop.item.withInsurance}.`)
   create-installments-response:
     type: function
     parameters:
@@ -742,11 +809,10 @@ nodes:
         const { v4: uuidV4 } = require("uuid");
         const BigNumber = require("bignumber.js");
         BigNumber.set($.ctx.constants.BIG_NUMBER_CONFIG);
+        const { withInsurance } = $.flow.loop.item
+        const insurance = $.flow.nodes["simulation-qitech-insurance-calculate-insurance"][0].output
 
-        const { REGISTER_FEE } = $.ctx.constants;
-
-        const qitechResponseData =
-          $.nodes["simulation-qitech-decrypt-response"][0].output.payload.data;
+        const qitechInstallment = $.flow.nodes["simulation-qitech-decrypt-response"][0].output.data;
 
         function isAllowed(installment) {
           const maxInstallmentValue = new BigNumber($.ctx.employment.limitPerInstallment)
@@ -760,32 +826,31 @@ nodes:
             .toNumber();
         };
 
-        return qitechResponseData.map(qitechResponse => {
-          const qitechInstallment = qitechResponse.data 
-          const firstInstallment = qitechInstallment.installments[0];
+        const firstInstallment = qitechInstallment.installments[0];
 
-          return {
-            id: uuidV4(),
-            installments: qitechInstallment.installments.length,
-            allowed: isAllowed(firstInstallment),
-            installmentValue: firstInstallment.total_amount,
-            registerFee: REGISTER_FEE,
-            iofValue: qitechInstallment.iof_amount,
-            totalValue: qitechInstallment.issue_amount,
-            monthlyCET: calculatePercentageValue(qitechInstallment.cet),
-            yearlyCET: calculatePercentageValue(qitechInstallment.annual_cet),
-            monthlyFee: calculatePercentageValue(
-              qitechInstallment.prefixed_interest_rate.monthly_rate
-            ),
-            yearlyFee: calculatePercentageValue(
-              qitechInstallment.prefixed_interest_rate.annual_rate
-            ),
-            daysToIncrease: 0,
-            firstDueDate: firstInstallment.due_date,
-            withInsurance: false,
-          };
-        });
-      next: create-simulation-response
+        return {
+          id: uuidV4(),
+          installments: qitechInstallment.installments.length,
+          allowed: isAllowed(firstInstallment),
+          installmentValue: firstInstallment.total_amount,
+          registerFee: $.ctx.constants.REGISTER_FEE,
+          iofValue: qitechInstallment.iof_amount,
+          totalValue: qitechInstallment.issue_amount,
+          monthlyCET: calculatePercentageValue(qitechInstallment.cet),
+          yearlyCET: calculatePercentageValue(qitechInstallment.annual_cet),
+          monthlyFee: calculatePercentageValue(
+            qitechInstallment.prefixed_interest_rate.monthly_rate
+          ),
+          yearlyFee: calculatePercentageValue(
+            qitechInstallment.prefixed_interest_rate.annual_rate
+          ),
+          daysToIncrease: 0,
+          firstDueDate: firstInstallment.due_date,
+          withInsurance,
+          insuranceType: insurance.insuranceType,
+          insuranceValue: insurance.value,
+          insuranceFee: calculatePercentageValue(insurance.fee),
+        };
   create-simulation-response:
     type: function
     parameters:
@@ -793,7 +858,9 @@ nodes:
         const { amount } = $.nodes.request[0].output.body;
         const { disbursementDate } = $.nodes["calculate-dates"][0].output;
 
-        const installmentSimulations = $.nodes["create-installments-response"][0].output
+        const installmentSimulations = $.nodes["create-installments-response"]
+          .map(node => node.output)
+          .filter(installmentSimulation => installmentSimulation.withInsurance === $.flow.loop.item.withInsurance)
         const firstInstallment = installmentSimulations[0];
 
         const fundId = "123456";
@@ -807,7 +874,6 @@ nodes:
           disbursementDate,
           installments: installmentSimulations,
         };
-      next: response
   response:
     type: webhook-response
     parameters:
@@ -815,13 +881,6 @@ nodes:
       headers:
         Content-Type: application/json
       body: '{{$.nodes."create-simulation-response"[*].output}}'
-  response-error-qitech:
-    type: webhook-response
-    parameters:
-      statusCode: 400
-      headers:
-        Content-Type: application/json
-      body: '{{ $.nodes."simulation-qitech-decrypt-response"[0].output }}'
   response-error-no-employment:
     type: webhook-response
     parameters:
