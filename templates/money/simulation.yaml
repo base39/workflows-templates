@@ -332,13 +332,13 @@ nodes:
             amount:
               type: number
               minimum: 0
-            customer:
+            employment:
               type: string
-              pattern: ^cust_\w+$
+              pattern: ^empl_\w+$
           required:
             - numberOfInstallments
             - amount
-            - customer
+            - employment
       next: set-ctx-constants
   set-ctx-constants:
     type: function
@@ -490,38 +490,31 @@ nodes:
           const { encoded_body: encodedBody } = qiTechResponse
           return decode(encodedBody)
         }
-      next: request-customer-data
-  request-customer-data:
+      next: request-employment-data
+  request-employment-data:
     type: http-request
     parameters:
       method: GET
-      url: "{{ $.secrets.base39BaseUrl }}/v1/customers/{{ $.nodes.request[0].output.body.customer }}"
+      url: "{{ $.secrets.base39BaseUrl }}/v1/employments/{{ $.nodes.request[0].output.body.employment }}"
       headers: *base39ApiHeaders
-      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
-      next: request-customer-employment-data
-  request-customer-employment-data:
-    type: http-request
-    parameters:
-      method: GET
-      url: "{{ $.secrets.base39BaseUrl }}/v1/employments"
-      headers: *base39ApiHeaders
+      ignoreResponseCode: true
       queryParameters:
         document: '{{ $.nodes."request-customer-data"[0].output.responseData.document }}'
       timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
-      next: check-customer-employment-data
-  check-customer-employment-data:
+      next: check-employment-data
+  check-employment-data:
     type: conditional
     parameters:
       conditions:
         - next: response-error-no-employment
           expressions:
-            - leftValue: '{{ $.nodes."request-customer-employment-data"[0].output.responseData.data }}'
+            - leftValue: '{{ $.nodes."request-employment-data"[0].output.responseData }}'
               operation: empty
       default: set-ctx-employment
   set-ctx-employment:
     type: function
     parameters:
-      code: $.ctx.employment = $.nodes['request-customer-employment-data'][0].output.responseData.data[0]
+      code: $.ctx.employment = $.nodes['request-employment-data'][0].output.responseData
       next: request-company-data
   request-company-data:
     type: http-request
@@ -529,8 +522,18 @@ nodes:
       method: GET
       url: "{{ $.secrets.base39BaseUrl }}/v1/companies/{{ $.ctx.employment.company }}"
       headers: *base39ApiHeaders
+      ignoreResponseCode: true
       timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
       next: calculate-dates
+  check-request-company-data:
+    type: conditional
+    parameters:
+      conditions:
+        - next: response-error-no-company
+          expressions:
+            - leftValue: '{{ $.nodes."request-company-data"[0].output.responseData }}'
+              operation: empty
+      default: set-ctx-employment
   calculate-dates:
     type: function
     parameters:
@@ -887,7 +890,14 @@ nodes:
       statusCode: 400
       body:
         code: EMPLOYMENT_NOT_FOUND
-        message: "No employment found for the given customer."
+        message: "Employment not found."
+  response-error-no-company:
+    type: webhook-response
+    parameters:
+      statusCode: 400
+      body:
+        code: EMPLOYMENT_NOT_FOUND
+        message: "No company found for the given employment."
   response-error-no-credit-policy:
     type: webhook-response
     parameters:
