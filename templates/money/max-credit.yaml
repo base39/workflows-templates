@@ -56,7 +56,17 @@ nodes:
       url: "{{ $.ctx.base39.baseUrl }}/customers"
       queryParameters:
         document: "{{ $.nodes.webhook[0].output.queryParameters.document }}"
-      next: find-employments
+      ignoreResponseCode: true
+      next: check-customer
+  check-customer:
+    type: conditional
+    parameters:
+      conditions:
+        - next: response-error-no-customer
+          expressions:
+            - leftValue: '{{ $.nodes."find-customer"[0].output.responseData.data }}'
+              operation: empty
+      default: find-employments
   find-employments:
     type: http-request
     parameters:
@@ -66,7 +76,17 @@ nodes:
       url: "{{ $.ctx.base39.baseUrl }}/employments"
       queryParameters:
         document: "{{ $.nodes.webhook[0].output.queryParameters.document }}"
-      next: find-companies
+      ignoreResponseCode: true
+      next: check-employments
+  check-employments:
+    type: conditional
+    parameters:
+      conditions:
+        - next: response-error-no-employment
+          expressions:
+            - leftValue: '{{ $.nodes."find-employments"[0].output.responseData.data }}'
+              operation: empty
+      default: find-companies
   find-companies:
     type: loop
     parameters:
@@ -81,6 +101,7 @@ nodes:
       method: GET
       headers: *base39ApiHeader
       url: "{{ $.ctx.base39.baseUrl }}/companies/{{ $.flow.loop.item }}"
+      ignoreResponseCode: true
   find-open-loans:
     type: http-request
     parameters:
@@ -206,9 +227,9 @@ nodes:
           return acc + execution.output.responseData.data.reduce(sumTotalAmount, 0)
         }       
 
-        const totalAmount = findInstallmentExecutions.reduce(sumInstallmentsTotalAmount, 0)
-        const totalInstallments = loans.reduce(sumInstallments, 0)
-        const totalDisbursedLoans = disbursedLoans.length
+        const totalAmount = findInstallmentExecutions ? findInstallmentExecutions.reduce(sumInstallmentsTotalAmount, 0) : 0
+        const totalInstallments = loans ? loans.reduce(sumInstallments, 0) : 0
+        const totalDisbursedLoans = disbursedLoans ? disbursedLoans.length : 0
 
         return {
           totalInstallments,
@@ -312,3 +333,17 @@ nodes:
       statusCode: 200
       body:
         data: '{{ $.nodes."bind-response"[*].output }}'
+  response-error-no-employment:
+    type: webhook-response
+    parameters:
+      statusCode: 404
+      body:
+        code: EMPLOYMENT_NOT_FOUND
+        message: "No employment found for the given document."
+  response-error-no-customer:
+    type: webhook-response
+    parameters:
+      statusCode: 404
+      body:
+        code: CUSTOMER_NOT_FOUND
+        message: "No customer found for the given document."
