@@ -6,34 +6,17 @@ nodes:
       path: /max-credit
       method: post
       validation:
-        queryParameters:
-          document:
-            type: string
-            required: true
         body:
           type: object
           properties:
-            consignableMargin:
-              type: number
-            iof:
-              type: number
-            fee:
-              type: number
+            document:
+              type: string
             product:
+              type: string
+            metadata:
               type: object
-              required:
-                - metaData
-              properties:
-                slug:
-                  type: string
-                eligibilitySettings:
-                  type: object
-                metaData:
-                  type: object
           required:
-            - consignableMargin
-            - iof
-            - fee
+            - document
             - product
       next: set-ctx-constants
   set-ctx-constants:
@@ -58,14 +41,14 @@ nodes:
         "x-api-key": "{{ $.secrets.base39ApiKey }}"
       url: "{{ $.ctx.base39.baseUrl }}/customers"
       queryParameters:
-        document: "{{ $.nodes.webhook[0].output.queryParameters.document }}"
+        document: "{{ $.nodes.webhook[0].output.body.document }}"
       ignoreResponseCode: true
       next: check-customer
   check-customer:
     type: conditional
     parameters:
       conditions:
-        - next: response-error-no-customer
+        - next: response-error
           expressions:
             - leftValue: '{{ $.nodes."find-customer"[0].output.responseData.data }}'
               operation: empty
@@ -78,17 +61,36 @@ nodes:
       headers: *base39ApiHeader
       url: "{{ $.ctx.base39.baseUrl }}/employments"
       queryParameters:
-        document: "{{ $.nodes.webhook[0].output.queryParameters.document }}"
+        document: "{{ $.nodes.webhook[0].output.body.document }}"
       ignoreResponseCode: true
       next: check-employments
   check-employments:
     type: conditional
     parameters:
       conditions:
-        - next: response-error-no-employment
+        - next: response-error
           expressions:
             - leftValue: '{{ $.nodes."find-employments"[0].output.responseData.data }}'
               operation: empty
+      default: find-product
+  find-product:
+    type: http-request
+    parameters:
+      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
+      method: GET
+      headers: *base39ApiHeader
+      url: "{{ $.ctx.base39.baseUrl }}/products/{{ $.nodes.webhook[0].output.body.product }}"
+      ignoreResponseCode: true
+      next: check-product
+  check-product:
+    type: conditional
+    parameters:
+      conditions:
+        - next: response-error
+          expressions:
+            - leftValue: '{{ $.nodes."find-product"[0].output.status }}'
+              operation: not-equal
+              rightValue: 200
       default: find-companies
   find-companies:
     type: loop
@@ -254,10 +256,16 @@ nodes:
         const maxInstallmentReduction = $.nodes["sum-loans"][0].output.totalInstallments
         const netSalary = $.flow.loop.item.netSalary
         const limitPerInstallment = $.flow.loop.item.limitPerInstallment
+        const { metadata } = $.nodes['find-product'][0].output.responseData
 
-        const estimatedMaxInstallment = netSalary * $.nodes.webhook[0].output.body.consignableMargin
+        let margin = metadata && metadata.consignableMargin ? metadata.consignableMargin : 0.35
+
+        const estimatedMaxInstallment = netSalary * margin
         const maxInstallment = Math.max(estimatedMaxInstallment - maxInstallmentReduction, 0)
-        return Math.min(maxInstallment, limitPerInstallment)
+        if(limitPerInstallment){
+          return Math.min(maxInstallment, limitPerInstallment)
+        }
+        return maxInstallment
       next: calculate-max-credit
   calculate-max-credit:
     type: function
@@ -266,11 +274,10 @@ nodes:
         const { differenceInDays, startOfDay, addMonths } = require('date-fns')
         const BigNumber = require('bignumber.js')
 
+        const { iof, monthlyFee, maxNumberOfInstallments } = $.nodes['find-product'][0].output.responseData.metadata
+
         const grossSalary = $.flow.loop.item.grossSalary
         const limitPerLoan = $.flow.loop.item.limitPerLoan
-        const iof = $.nodes.webhook[0].output.body.iof
-        const monthlyFee = $.nodes.webhook[0].output.body.fee
-        const { maxNumberOfInstallments } = $.nodes.webhook[0].output.body.product.metaData
         const maxCreditReduction = $.nodes["sum-loans"][0].output.totalInstallments + grossSalary * iof
         const maxInstallmentValue = $.flow.nodes["calculate-max-installment"][0].output
 
@@ -288,7 +295,10 @@ nodes:
 
         const estimatedMaxCredit = sum * maxInstallmentValue
         const maxCredit = Math.max(estimatedMaxCredit - maxCreditReduction, 0)
-        return Math.min(maxCredit, limitPerLoan)
+        if(limitPerLoan){
+          return Math.min(maxCredit, limitPerLoan)
+        }
+        return maxCredit
       next: round-values
   round-values:
     type: function
@@ -296,6 +306,7 @@ nodes:
       code: |
         const maxInstallment = $.flow.nodes['calculate-max-installment'][0].output
         const maxCredit = $.flow.nodes['calculate-max-credit'][0].output
+        const { maxNumberOfInstallments } = $.nodes['find-product'][0].output.responseData.metadata
 
         function roundByPlaceValue(maxCredit) {
           const place = Math.trunc(Math.round((100 * Math.log(maxCredit)) / Math.log(10)) / 100)
@@ -305,26 +316,27 @@ nodes:
 
         return {
           maxInstallment: roundByPlaceValue(maxInstallment),
-          maxCredit: roundByPlaceValue(maxCredit)
+          maxCredit: roundByPlaceValue(maxCredit),
+          minInstallmentValue: roundByPlaceValue(maxCredit / maxNumberOfInstallments),
         }
       next: bind-response
   bind-response:
     type: function
     parameters:
       code: |
-        const { maxCredit, maxInstallment } = $.flow.nodes['round-values'][0].output
-        const { maxNumberOfInstallments, minNumberOfInstallments, minLoanAmount } = $.nodes.webhook[0].output.body.product.metaData
+        const { maxCredit, maxInstallment, minInstallmentValue } = $.flow.nodes['round-values'][0].output
+        const { maxNumberOfInstallments, minNumberOfInstallments, minLoanAmount } = $.nodes['find-product'][0].output.responseData.metadata
 
         return {
-          slug: $.nodes.webhook[0].output.body.product.slug,
-          name: "string",
-          description: "string",
+          slug: $.nodes['find-product'][0].output.responseData.slug,
+          name: $.nodes['find-product'][0].output.responseData.name,
+          description:$.nodes['find-product'][0].output.responseData.description,
           maxLoanAmount: maxCredit,
           minLoanAmount,
           maxNumberOfInstallments,
           minNumberOfInstallments,
           maxInstallmentValue: maxInstallment,
-          minInstallmentValue: maxCredit / maxNumberOfInstallments,
+          minInstallmentValue,
           customer: $.nodes['find-customer'][0].output.responseData.data[0].id,
           employment: $.flow.loop.item.id,
           available: true,
@@ -336,17 +348,9 @@ nodes:
       statusCode: 200
       body:
         data: '{{ $.nodes."bind-response"[*].output }}'
-  response-error-no-employment:
+  response-error:
     type: webhook-response
     parameters:
       statusCode: 404
       body:
-        code: EMPLOYMENT_NOT_FOUND
-        message: "No employment found for the given document."
-  response-error-no-customer:
-    type: webhook-response
-    parameters:
-      statusCode: 404
-      body:
-        code: CUSTOMER_NOT_FOUND
-        message: "No customer found for the given document."
+        data: []
