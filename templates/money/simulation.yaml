@@ -8,7 +8,7 @@ creditPolicies: &creditPoliciesCode |
       "minCreditRequest": 100,
       "monthlyAndRegisterFee": [
         {
-          "insuranceType": "OPTIONAL",
+          "insuranceType": "UNINSURED",
           "minMonth": 1,
           "maxMonth": 20,
           "monthlyFee": 0.7,
@@ -17,13 +17,13 @@ creditPolicies: &creditPoliciesCode |
         {
           "insuranceType": "OPTIONAL",
           "minMonth": 21,
-          "maxMonth": 50,
+          "maxMonth": 32,
           "monthlyFee": 1.0,
           "registerFee": 10
         },
         {
           "insuranceType": "REQUIRED",
-          "minMonth": 51,
+          "minMonth": 33,
           "maxMonth": 99,
           "monthlyFee": 1.5,
           "registerFee": 15
@@ -315,9 +315,6 @@ nodes:
       path: /v1/simulation
       method: POST
       validation:
-        headers:
-          authorization:
-            required: true
         body:
           type: object
           properties:
@@ -332,13 +329,13 @@ nodes:
             amount:
               type: number
               minimum: 0
-            customer:
+            employment:
               type: string
-              pattern: ^cust_\w+$
+              pattern: ^empl_\w+$
           required:
             - numberOfInstallments
             - amount
-            - customer
+            - employment
       next: set-ctx-constants
   set-ctx-constants:
     type: function
@@ -490,38 +487,32 @@ nodes:
           const { encoded_body: encodedBody } = qiTechResponse
           return decode(encodedBody)
         }
-      next: request-customer-data
-  request-customer-data:
+      next: request-employment-data
+  request-employment-data:
     type: http-request
     parameters:
       method: GET
-      url: "{{ $.secrets.base39BaseUrl }}/v1/customers/{{ $.nodes.request[0].output.body.customer }}"
+      url: "{{ $.secrets.base39BaseUrl }}/v1/employments/{{ $.nodes.request[0].output.body.employment }}"
       headers: *base39ApiHeaders
-      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
-      next: request-customer-employment-data
-  request-customer-employment-data:
-    type: http-request
-    parameters:
-      method: GET
-      url: "{{ $.secrets.base39BaseUrl }}/v1/employments"
-      headers: *base39ApiHeaders
+      ignoreResponseCode: true
       queryParameters:
         document: '{{ $.nodes."request-customer-data"[0].output.responseData.document }}'
       timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
-      next: check-customer-employment-data
-  check-customer-employment-data:
+      next: check-employment-data
+  check-employment-data:
     type: conditional
     parameters:
       conditions:
         - next: response-error-no-employment
           expressions:
-            - leftValue: '{{ $.nodes."request-customer-employment-data"[0].output.responseData.data }}'
-              operation: empty
+            - leftValue: '{{ $.nodes."request-employment-data"[0].output.status }}'
+              operation: not-equal
+              rightValue: 200
       default: set-ctx-employment
   set-ctx-employment:
     type: function
     parameters:
-      code: $.ctx.employment = $.nodes['request-customer-employment-data'][0].output.responseData.data[0]
+      code: $.ctx.employment = $.nodes['request-employment-data'][0].output.responseData
       next: request-company-data
   request-company-data:
     type: http-request
@@ -529,8 +520,18 @@ nodes:
       method: GET
       url: "{{ $.secrets.base39BaseUrl }}/v1/companies/{{ $.ctx.employment.company }}"
       headers: *base39ApiHeaders
+      ignoreResponseCode: true
       timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
       next: calculate-dates
+  check-request-company-data:
+    type: conditional
+    parameters:
+      conditions:
+        - next: response-error-no-company
+          expressions:
+            - leftValue: '{{ $.nodes."request-company-data"[0].output.responseData }}'
+              operation: empty
+      default: set-ctx-employment
   calculate-dates:
     type: function
     parameters:
@@ -617,38 +618,19 @@ nodes:
             - leftValue: "{{ $.nodes.request[0].output.body.amount }}"
               operation: less
               rightValue: '{{ $.nodes."get-credit-policy"[0].output.minCreditRequest }}'
-      default: with-and-without-insurance-loop
-  with-and-without-insurance-loop:
+      default: simulation-installment-loop
+  simulation-installment-loop:
     type: loop
     parameters:
-      items:
-        - withInsurance: true
-        - withInsurance: false
-      concurrency: 2
-      starterNode: simulation-qitech-loop-items
-      next: response
-  simulation-qitech-loop-items:
-    type: function
-    parameters:
-      code: |
-        const { numberOfInstallments } = $.nodes.request[0].output.body
-        return numberOfInstallments.map(installmentsNumber => ({
-          installmentsNumber,
-          withInsurance: $.flow.loop.item.withInsurance
-        }))
-      next: simulation-qitech-loop
-  simulation-qitech-loop:
-    type: loop
-    parameters:
-      items: '{{ $.flow.nodes."simulation-qitech-loop-items"[0].output }}'
+      items: '{{ $.nodes.request[0].output.body.numberOfInstallments }}'
       concurrency: 5
-      starterNode: simulation-qitech-insurance-get-policy-rules
+      starterNode: simulation-qitech-insurance-get-policy-rule
       next: create-simulation-response
-  simulation-qitech-insurance-get-policy-rules:
+  simulation-qitech-insurance-get-policy-rule:
     type: function
     parameters:
       code: |
-        const { installmentsNumber } = $.flow.loop.item
+        const installmentsNumber = $.flow.loop.item
         const creditPolicy = $.nodes["get-credit-policy"][0].output;
 
         const applyableRules = creditPolicy.monthlyAndRegisterFee
@@ -665,7 +647,36 @@ nodes:
         }
 
         return applyableRules[0];
-      next: simulation-qitech-insurance-calculate-insurance
+      next: simulation-credit-policy-insurance-type-loop-items
+  simulation-credit-policy-insurance-type-loop-items:
+    type: function
+    parameters:
+      code: |
+        const policyRule = $.flow.nodes["simulation-qitech-insurance-get-policy-rule"][0].output
+        const { insuranceType } = policyRule
+
+        const withInsuranceOptions = []
+
+        if (insuranceType === 'REQUIRED' || insuranceType === 'OPTIONAL') {
+          withInsuranceOptions.push(true)
+        }
+
+        if (insuranceType === 'UNINSURED' || insuranceType === 'OPTIONAL') {
+          withInsuranceOptions.push(false)
+        }
+
+        return withInsuranceOptions.map(withInsurance => ({
+          withInsurance,
+          policyRule,
+          installmentsNumber: $.flow.loop.item,
+        }))
+      next: simulation-credit-policy-insurance-type-loop
+  simulation-credit-policy-insurance-type-loop:
+    type: loop
+    parameters:
+      items: '{{ $.flow.nodes."simulation-credit-policy-insurance-type-loop-items"[0].output }}'
+      concurrency: 2
+      starterNode: simulation-qitech-insurance-calculate-insurance
   simulation-qitech-insurance-calculate-insurance:
     type: function
     parameters:
@@ -674,17 +685,18 @@ nodes:
         BigNumber.set($.ctx.constants.BIG_NUMBER_CONFIG);
 
         const { amount } = $.nodes.request[0].output.body;
-        const { withInsurance } = $.flow.loop.item
-        const { insuranceType } = $.flow.nodes["simulation-qitech-insurance-get-policy-rules"][0].output
+        const { withInsurance, policyRule: { insuranceType } } = $.flow.loop.item
 
         let fee = 0
         let optional = false
 
-        if (insuranceType === 'REQUIRED') {
-          fee = $.ctx.constants.REQUIRED_INSURANCE_FEE
-        } else if (insuranceType === 'OPTIONAL' && withInsurance) {
-          fee = $.ctx.constants.OPTIONAL_INSURANCE_FEE
-          optional = true
+        if (withInsurance) {
+          if (insuranceType === 'OPTIONAL') {
+            fee = $.ctx.constants.OPTIONAL_INSURANCE_FEE
+            optional = true
+          } else {
+            fee = $.ctx.constants.REQUIRED_INSURANCE_FEE
+          }
         }
 
         const value = new BigNumber(amount)
@@ -705,10 +717,9 @@ nodes:
         const { BigNumber } = require("bignumber.js");
         BigNumber.set($.ctx.constants.BIG_NUMBER_CONFIG);
 
-        const { installmentsNumber } = $.flow.loop.item
+        const { installmentsNumber, policyRule } = $.flow.loop.item
         const { amount } = $.nodes.request[0].output.body;
         const { firstDueDate, disbursementDate } = $.nodes["calculate-dates"][0].output;
-        const policyRules = $.flow.nodes["simulation-qitech-insurance-get-policy-rules"][0].output
         const insurance = $.flow.nodes["simulation-qitech-insurance-calculate-insurance"][0].output
 
         function createRebates(registerFee) {
@@ -741,8 +752,8 @@ nodes:
             person_type: "natural",
           },
           financial: {
-            rebates: createRebates(policyRules.registerFee, insurance),
-            monthly_interest_rate: toPercentageValue(policyRules.monthlyFee),
+            rebates: createRebates(policyRule.registerFee, insurance),
+            monthly_interest_rate: toPercentageValue(policyRule.monthlyFee),
             fine_configuration: {
               interest_base: "calendar_days",
               monthly_rate: $.ctx.constants.MONTHLY_RATE,
@@ -809,7 +820,7 @@ nodes:
         const { v4: uuidV4 } = require("uuid");
         const BigNumber = require("bignumber.js");
         BigNumber.set($.ctx.constants.BIG_NUMBER_CONFIG);
-        const { withInsurance } = $.flow.loop.item
+        const { withInsurance, policyRule } = $.flow.loop.item
         const insurance = $.flow.nodes["simulation-qitech-insurance-calculate-insurance"][0].output
 
         const qitechInstallment = $.flow.nodes["simulation-qitech-decrypt-response"][0].output.data;
@@ -833,7 +844,7 @@ nodes:
           installments: qitechInstallment.installments.length,
           allowed: isAllowed(firstInstallment),
           installmentValue: firstInstallment.total_amount,
-          registerFee: $.ctx.constants.REGISTER_FEE,
+          registerFee: policyRule.registerFee,
           iofValue: qitechInstallment.iof_amount,
           totalValue: qitechInstallment.issue_amount,
           monthlyCET: calculatePercentageValue(qitechInstallment.cet),
@@ -847,7 +858,7 @@ nodes:
           daysToIncrease: 0,
           firstDueDate: firstInstallment.due_date,
           withInsurance,
-          insuranceType: insurance.insuranceType,
+          insuranceType: policyRule.insuranceType,
           insuranceValue: insurance.value,
           insuranceFee: calculatePercentageValue(insurance.fee),
         };
@@ -858,36 +869,38 @@ nodes:
         const { amount } = $.nodes.request[0].output.body;
         const { disbursementDate } = $.nodes["calculate-dates"][0].output;
 
-        const installmentSimulations = $.nodes["create-installments-response"]
-          .map(node => node.output)
-          .filter(installmentSimulation => installmentSimulation.withInsurance === $.flow.loop.item.withInsurance)
-        const firstInstallment = installmentSimulations[0];
-
-        const fundId = "123456";
+        const installmentSimulations = $.nodes["create-installments-response"].map(node => node.output)
+        const firstInstallment = installmentSimulations.length ? installmentSimulations[0] : null;
 
         return {
           amount: amount,
-          firstDueDate: firstInstallment.firstDueDate,
+          firstDueDate: firstInstallment?.firstDueDate,
           daysToIncrease: 0,
-          acquittanceLoans: [],
-          fund: fundId,
           disbursementDate,
           installments: installmentSimulations,
         };
+      next: response
   response:
     type: webhook-response
     parameters:
       statusCode: 200
       headers:
         Content-Type: application/json
-      body: '{{$.nodes."create-simulation-response"[*].output}}'
+      body: '{{$.nodes."create-simulation-response"[0].output}}'
   response-error-no-employment:
     type: webhook-response
     parameters:
       statusCode: 400
       body:
         code: EMPLOYMENT_NOT_FOUND
-        message: "No employment found for the given customer."
+        message: "Employment not found."
+  response-error-no-company:
+    type: webhook-response
+    parameters:
+      statusCode: 400
+      body:
+        code: EMPLOYMENT_NOT_FOUND
+        message: "No company found for the given employment."
   response-error-no-credit-policy:
     type: webhook-response
     parameters:

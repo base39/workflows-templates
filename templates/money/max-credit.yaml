@@ -21,17 +21,20 @@ nodes:
               type: number
             product:
               type: object
+              required:
+                - metaData
               properties:
                 slug:
                   type: string
                 eligibilitySettings:
                   type: object
-                metdaData:
+                metaData:
                   type: object
           required:
             - consignableMargin
             - iof
             - fee
+            - product
       next: set-ctx-constants
   set-ctx-constants:
     type: function
@@ -267,7 +270,7 @@ nodes:
         const limitPerLoan = $.flow.loop.item.limitPerLoan
         const iof = $.nodes.webhook[0].output.body.iof
         const monthlyFee = $.nodes.webhook[0].output.body.fee
-        const { maxNumberOfInstallments } = $.nodes.webhook[0].output.body.product.metdaData
+        const { maxNumberOfInstallments } = $.nodes.webhook[0].output.body.product.metaData
         const maxCreditReduction = $.nodes["sum-loans"][0].output.totalInstallments + grossSalary * iof
         const maxInstallmentValue = $.flow.nodes["calculate-max-installment"][0].output
 
@@ -310,7 +313,7 @@ nodes:
     parameters:
       code: |
         const { maxCredit, maxInstallment } = $.flow.nodes['round-values'][0].output
-        const { maxNumberOfInstallments, minNumberOfInstallments, minLoanAmount } = $.nodes.webhook[0].output.body.product.metdaData
+        const { maxNumberOfInstallments, minNumberOfInstallments, minLoanAmount } = $.nodes.webhook[0].output.body.product.metaData
 
         return {
           slug: $.nodes.webhook[0].output.body.product.slug,
