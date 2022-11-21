@@ -225,7 +225,7 @@ nodes:
         }
 
         function sumTotalAmount(acc, installment) {
-          return acc + installment.totalAmount
+          return acc + (installment.totalAmount * 100)
         }
 
         function sumInstallmentsTotalAmount(acc, execution) {
@@ -254,8 +254,8 @@ nodes:
     parameters:
       code: |
         const maxInstallmentReduction = $.nodes["sum-loans"][0].output.totalInstallments
-        const netSalary = $.flow.loop.item.netSalary
-        const limitPerInstallment = $.flow.loop.item.limitPerInstallment
+        const netSalary = $.flow.loop.item.netSalary / 100
+        const limitPerInstallment = $.flow.loop.item.limitPerInstallment / 100
         const { metadata } = $.nodes['find-product'][0].output.responseData
 
         let margin = metadata && metadata.consignableMargin ? metadata.consignableMargin : 0.35
@@ -276,8 +276,8 @@ nodes:
 
         const { iof, monthlyFee, maxNumberOfInstallments } = $.nodes['find-product'][0].output.responseData.metadata
 
-        const grossSalary = $.flow.loop.item.grossSalary
-        const limitPerLoan = $.flow.loop.item.limitPerLoan
+        const grossSalary = $.flow.loop.item.grossSalary / 100
+        const limitPerLoan = $.flow.loop.item.limitPerLoan / 100
         const maxCreditReduction = $.nodes["sum-loans"][0].output.totalInstallments + grossSalary * iof
         const maxInstallmentValue = $.flow.nodes["calculate-max-installment"][0].output
 
@@ -331,12 +331,12 @@ nodes:
           slug: $.nodes['find-product'][0].output.responseData.slug,
           name: $.nodes['find-product'][0].output.responseData.name,
           description:$.nodes['find-product'][0].output.responseData.description,
-          maxLoanAmount: maxCredit,
-          minLoanAmount,
+          maxLoanAmount: maxCredit * 100,
+          minLoanAmount: minLoanAmount * 100,
           maxNumberOfInstallments,
           minNumberOfInstallments,
-          maxInstallmentValue: maxInstallment,
-          minInstallmentValue,
+          maxInstallmentValue: maxInstallment * 100,
+          minInstallmentValue: minInstallmentValue * 100,
           customer: $.nodes['find-customer'][0].output.responseData.data[0].id,
           employment: $.flow.loop.item.id,
           available: true,
