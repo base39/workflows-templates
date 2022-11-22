@@ -5,28 +5,31 @@ creditPolicies: &creditPoliciesCode |
       "maxWorkingMonths": 999,
       "minWorkingMonths": 1,
       "salaryQtd": 10000,
-      "minCreditRequest": 100,
+      "minCreditRequestAmount": $.ctx.numberToAmount(100),
       "monthlyAndRegisterFee": [
         {
-          "insuranceType": "UNINSURED",
+          "insuranceType": "uninsured",
           "minMonth": 1,
           "maxMonth": 20,
           "monthlyFee": 0.7,
-          "registerFee": 5
+          "registerFee": 5,
+          "fund": "fund_123456",
         },
         {
-          "insuranceType": "OPTIONAL",
+          "insuranceType": "optional",
           "minMonth": 21,
           "maxMonth": 32,
           "monthlyFee": 1.0,
-          "registerFee": 10
+          "registerFee": 10,
+          "fund": "fund_123456",
         },
         {
-          "insuranceType": "REQUIRED",
+          "insuranceType": "required",
           "minMonth": 33,
           "maxMonth": 99,
           "monthlyFee": 1.5,
-          "registerFee": 15
+          "registerFee": 15,
+          "fund": "fund_123456",
         }
       ],
     },
@@ -35,14 +38,15 @@ creditPolicies: &creditPoliciesCode |
       "maxWorkingMonths": 10,
       "minWorkingMonths": 1,
       "salaryQtd": 0.4,
-      "minCreditRequest": 1,
+      "minCreditRequestAmount": $.ctx.numberToAmount(1),
       "monthlyAndRegisterFee": [
         {
-          "insuranceType": "UNINSURED",
+          "insuranceType": "uninsured",
           "minMonth": 1,
           "maxMonth": 60,
           "monthlyFee": 1,
-          "registerFee": 1
+          "registerFee": 1,
+          "fund": "fund_123456",
         }
       ]
     }
@@ -54,6 +58,7 @@ ctxConstants: &ctxConstantsCode |
     CONTRACT_FINE_RATE: 0.02,
     OPTIONAL_INSURANCE_FEE: 0.045,
     REQUIRED_INSURANCE_FEE: 0.0179,
+    INSURANCE_INSURER: 'usebens',
     HTTP_REQUEST_TIMEOUT: 90000,
     DECIMAL_PLACES: 3,
     BIG_NUMBER_CONFIG: {
@@ -327,8 +332,9 @@ nodes:
                 minimum: 6
                 maximum: 48
             amount:
-              type: number
+              type: integer
               minimum: 0
+              maximum: 9007199254740991
             employment:
               type: string
               pattern: ^empl_\w+$
@@ -341,14 +347,22 @@ nodes:
     type: function
     parameters:
       code: *ctxConstantsCode
-      next: set-ctx-qitech-functions
-  set-ctx-qitech-functions:
+      next: set-ctx-functions
+  set-ctx-functions:
     type: function
     parameters:
       code: |
         const jws = require('jws')
         const md5 = require('md5')
         const { v4: uuidV4 } = require('uuid')
+
+        $.ctx.amountToNumber = value => Number(value) / 100
+
+        $.ctx.numberToAmount = value => {
+          const [integerPart, decimalPart] = String(value).split('.')
+          const numberValue = `${integerPart}${(decimalPart || '').padEnd(2,0)}`
+          return Number(numberValue)
+        }
 
         const constants = {
           apiKey: $.secrets.qitechApiClientKey,
@@ -617,15 +631,15 @@ nodes:
           expressions:
             - leftValue: "{{ $.nodes.request[0].output.body.amount }}"
               operation: less
-              rightValue: '{{ $.nodes."get-credit-policy"[0].output.minCreditRequest }}'
+              rightValue: '{{ $.nodes."get-credit-policy"[0].output.minCreditRequestAmount }}'
       default: simulation-installment-loop
   simulation-installment-loop:
     type: loop
     parameters:
-      items: '{{ $.nodes.request[0].output.body.numberOfInstallments }}'
+      items: "{{ $.nodes.request[0].output.body.numberOfInstallments }}"
       concurrency: 5
       starterNode: simulation-qitech-insurance-get-policy-rule
-      next: create-simulation-response
+      next: response
   simulation-qitech-insurance-get-policy-rule:
     type: function
     parameters:
@@ -657,11 +671,11 @@ nodes:
 
         const withInsuranceOptions = []
 
-        if (insuranceType === 'REQUIRED' || insuranceType === 'OPTIONAL') {
+        if (insuranceType === 'required' || insuranceType === 'optional') {
           withInsuranceOptions.push(true)
         }
 
-        if (insuranceType === 'UNINSURED' || insuranceType === 'OPTIONAL') {
+        if (insuranceType === 'uninsured' || insuranceType === 'optional') {
           withInsuranceOptions.push(false)
         }
 
@@ -691,7 +705,7 @@ nodes:
         let optional = false
 
         if (withInsurance) {
-          if (insuranceType === 'OPTIONAL') {
+          if (insuranceType === 'optional') {
             fee = $.ctx.constants.OPTIONAL_INSURANCE_FEE
             optional = true
           } else {
@@ -699,7 +713,7 @@ nodes:
           }
         }
 
-        const value = new BigNumber(amount)
+        const value = new BigNumber($.ctx.amountToNumber(amount))
           .times(fee)
           .decimalPlaces($.ctx.constants.DECIMAL_PLACES)
           .toNumber()
@@ -714,18 +728,18 @@ nodes:
     type: function
     parameters:
       code: |
-        const { BigNumber } = require("bignumber.js");
-        BigNumber.set($.ctx.constants.BIG_NUMBER_CONFIG);
+        const { BigNumber } = require("bignumber.js")
+        BigNumber.set($.ctx.constants.BIG_NUMBER_CONFIG)
 
         const { installmentsNumber, policyRule } = $.flow.loop.item
-        const { amount } = $.nodes.request[0].output.body;
-        const { firstDueDate, disbursementDate } = $.nodes["calculate-dates"][0].output;
+        const { amount } = $.nodes.request[0].output.body
+        const { firstDueDate, disbursementDate } = $.nodes["calculate-dates"][0].output
         const insurance = $.flow.nodes["simulation-qitech-insurance-calculate-insurance"][0].output
 
-        function createRebates(registerFee) {
+        function createRebates() {
           const rebates = [
             {
-              amount: registerFee,
+              amount: policyRule.registerFee,
               fee_type: "tac",
               amount_type: "absolute",
             },
@@ -752,7 +766,7 @@ nodes:
             person_type: "natural",
           },
           financial: {
-            rebates: createRebates(policyRule.registerFee, insurance),
+            rebates: createRebates(),
             monthly_interest_rate: toPercentageValue(policyRule.monthlyFee),
             fine_configuration: {
               interest_base: "calendar_days",
@@ -763,7 +777,7 @@ nodes:
             interest_grace_period: 0,
             principal_grace_period: 0,
             disbursement_date: disbursementDate,
-            disbursed_amount: amount,
+            disbursed_amount: $.ctx.amountToNumber(amount),
             interest_type: "pre_price_days",
             first_due_date: firstDueDate,
             credit_operation_type: "ccb",
@@ -803,7 +817,7 @@ nodes:
     type: conditional
     parameters:
       conditions:
-        - next: create-installments-response
+        - next: create-installment-response
           expressions:
             - leftValue: '{{$.flow.nodes."simulation-qitech-decrypt-response"[0].output.status}}'
               operation: equal
@@ -813,20 +827,22 @@ nodes:
     type: function
     parameters:
       code: throw new Error(`Error at simulation of installment=${$.flow.loop.item.installmentsNumber}, withInsurance=${$.flow.loop.item.withInsurance}.`)
-  create-installments-response:
+  create-installment-response:
     type: function
     parameters:
       code: |
-        const { v4: uuidV4 } = require("uuid");
-        const BigNumber = require("bignumber.js");
-        BigNumber.set($.ctx.constants.BIG_NUMBER_CONFIG);
+        const BigNumber = require("bignumber.js")
+        BigNumber.set($.ctx.constants.BIG_NUMBER_CONFIG)
+
+        const { amount } = $.nodes.request[0].output.body
         const { withInsurance, policyRule } = $.flow.loop.item
+        const { disbursementDate } = $.nodes["calculate-dates"][0].output
         const insurance = $.flow.nodes["simulation-qitech-insurance-calculate-insurance"][0].output
 
-        const qitechInstallment = $.flow.nodes["simulation-qitech-decrypt-response"][0].output.data;
+        const qitechInstallment = $.flow.nodes["simulation-qitech-decrypt-response"][0].output.data
 
         function isAllowed(installment) {
-          const maxInstallmentValue = new BigNumber($.ctx.employment.limitPerInstallment)
+          const maxInstallmentValue = new BigNumber($.ctx.amountToNumber($.ctx.employment.limitPerInstallment))
           return new BigNumber(installment.total_amount).isLessThanOrEqualTo(maxInstallmentValue)
         }
 
@@ -839,14 +855,52 @@ nodes:
 
         const firstInstallment = qitechInstallment.installments[0];
 
+        function createInsurance() {
+          if (withInsurance) {
+            return {
+              type: policyRule.insuranceType,
+              amount: $.ctx.numberToAmount(insurance.value),
+              fee: calculatePercentageValue(insurance.fee),
+              number: $.secrets.insuranceNumber,
+              insurer: $.ctx.constants.INSURANCE_INSURER,
+            }
+          }
+          return {
+              type: policyRule.insuranceType,
+              amount: 0,
+              fee: 0,
+              number: '',
+              insurer: '',
+            }
+        }
+
+        function createRebates() {
+          const rebates = [
+            {
+              feeType: 'tac',
+              amountType: 'absolute',
+              amount: $.ctx.numberToAmount(policyRule.registerFee),
+            }
+          ];
+
+          if (insurance.optional) {
+            rebates.push({
+              fee_type: 'tac_tax_free',
+              amount_type: 'absolute',
+              description: 'Prêmio de Seguro',
+              amount: $.ctx.numberToAmount(insurance.value),
+            })
+          }
+
+          return rebates;
+        }
+
         return {
-          id: uuidV4(),
-          installments: qitechInstallment.installments.length,
           allowed: isAllowed(firstInstallment),
-          installmentValue: firstInstallment.total_amount,
-          registerFee: policyRule.registerFee,
-          iofValue: qitechInstallment.iof_amount,
-          totalValue: qitechInstallment.issue_amount,
+          disbursementAmount: amount,
+          installmentAmount: $.ctx.numberToAmount(firstInstallment.total_amount),
+          totalAmount: $.ctx.numberToAmount(qitechInstallment.issue_amount),
+          iofAmount: $.ctx.numberToAmount(qitechInstallment.iof_amount),
           monthlyCET: calculatePercentageValue(qitechInstallment.cet),
           yearlyCET: calculatePercentageValue(qitechInstallment.annual_cet),
           monthlyFee: calculatePercentageValue(
@@ -855,38 +909,31 @@ nodes:
           yearlyFee: calculatePercentageValue(
             qitechInstallment.prefixed_interest_rate.annual_rate
           ),
-          daysToIncrease: 0,
+          insurance: createInsurance(),
+          interestType: qitechInstallment.interest_type,
+          creditOperationType: 'ccb',
+          expectedDisbursementDate: disbursementDate,
+          interestGracePeriod: qitechInstallment.interest_grace_period,
+          principalGracePeriod: qitechInstallment.principal_grace_period,
+          numberOfInstallments: qitechInstallment.installments.length,
           firstDueDate: firstInstallment.due_date,
-          withInsurance,
-          insuranceType: policyRule.insuranceType,
-          insuranceValue: insurance.value,
-          insuranceFee: calculatePercentageValue(insurance.fee),
+          fund: policyRule.fund,
+          rebates: createRebates(),
+          fine: {
+            fineRate: $.ctx.constants.CONTRACT_FINE_RATE,
+            interestBase: 'workdays',
+            monthlyRate: $.ctx.constants.MONTHLY_RATE,
+          },
+          acquittanceLoans: [],
         };
-  create-simulation-response:
-    type: function
-    parameters:
-      code: |
-        const { amount } = $.nodes.request[0].output.body;
-        const { disbursementDate } = $.nodes["calculate-dates"][0].output;
-
-        const installmentSimulations = $.nodes["create-installments-response"].map(node => node.output)
-        const firstInstallment = installmentSimulations.length ? installmentSimulations[0] : null;
-
-        return {
-          amount: amount,
-          firstDueDate: firstInstallment?.firstDueDate,
-          daysToIncrease: 0,
-          disbursementDate,
-          installments: installmentSimulations,
-        };
-      next: response
   response:
     type: webhook-response
     parameters:
       statusCode: 200
       headers:
         Content-Type: application/json
-      body: '{{$.nodes."create-simulation-response"[0].output}}'
+      body:
+        data: '{{$.nodes."create-installment-response"[*].output}}'
   response-error-no-employment:
     type: webhook-response
     parameters:
@@ -916,4 +963,4 @@ nodes:
         message: "The requested amount is less than the minimum allowed."
         code: MIN_CREDIT_REQUEST_ERROR
         details:
-          minCredit: '{{ $.nodes."get-credit-policy"[0].output.minCreditRequest }}'
+          minCredit: '{{ $.nodes."get-credit-policy"[0].output.minCreditRequestAmount }}'
