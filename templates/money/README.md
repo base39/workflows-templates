@@ -3,17 +3,17 @@
 Templates de fluxos para cálculo de crédito.
 
 - [Calcular crédito máximo](#calcular-crédito-máximo)
-	- [Parâmetros](#parâmetros)
-	- [Corpo de requisição](#corpo-de-requisição)
-	- [Segredos](#segredos)
-	- [Resposta](#resposta)
+  - [Parâmetros](#parâmetros)
+  - [Corpo de requisição](#corpo-de-requisição)
+  - [Segredos](#segredos)
+  - [Resposta](#resposta)
 - [Requisição POST Qitech](#requisição-post-qitech)
-	- [Corpo de requisição](#corpo-de-requisição-1)
-	- [Segredos](#segredos-1)
+  - [Corpo de requisição](#corpo-de-requisição-1)
+  - [Segredos](#segredos-1)
 - [Calcular simulação](#calcular-simulação)
-	- [Corpo de requisição](#corpo-de-requisição-2)
-	- [Resposta](#resposta-1)
-	- [Segredos](#segredos-2)
+  - [Corpo de requisição](#corpo-de-requisição-2)
+  - [Resposta](#resposta-1)
+  - [Segredos](#segredos-2)
 
 
 <br>
@@ -184,6 +184,7 @@ Template: [simulation.yaml](./simulation.yaml)
 | numberOfInstallments | Array&lt;String&gt; | &check;     | Lista dos parcelamentos para serem calculados.                               |
 | amount               | Number              | &check;     | Valor do empréstimo a ser simulado.                                          |
 | employment           | String              | &check;     | Identificador do vínculo empregatício do cliente que solicitou o empréstimo. |
+| product              | String              | &check;     | Identificador do produto ao qual a oferta foi calculada.                     |
 
 
 <details>
@@ -216,58 +217,13 @@ Template: [simulation.yaml](./simulation.yaml)
 {
     "data": [
         {
-            "allowed": true,
             "disbursementAmount": 10000,
-            "installmentAmount": 488,
-            "totalAmount": 11793,
-            "iofAmount": 343,
-            "monthlyCET": 2.19,
-            "yearlyCET": 29.688,
-            "monthlyFee": 1,
-            "yearlyFee": 12.682,
-            "insurance": {
-                "type": "optional",
-                "amount": 450,
-                "fee": 4.5,
-                "number": "12345.1234.1234.1234.123456",
-                "insurer": "usebens"
-            },
-            "interestType": "pre_price_days",
-            "creditOperationType": "ccb",
-            "expectedDisbursementDate": "2022-11-22",
-            "interestGracePeriod": 0,
-            "principalGracePeriod": 0,
-            "numberOfInstallments": 28,
-            "firstDueDate": "2023-01-10",
-            "fund": "fund_123456",
-            "rebates": [
-                {
-                    "feeType": "tac",
-                    "amountType": "absolute",
-                    "amount": 1000
-                },
-                {
-                    "fee_type": "tac_tax_free",
-                    "amount_type": "absolute",
-                    "description": "Prêmio de Seguro",
-                    "amount": 450
-                }
-            ],
-            "fine": {
-                "fineRate": 0.02,
-                "interestBase": "workdays",
-                "monthlyRate": 0.01
-            },
-            "acquittanceLoans": []
-        },
-        {
-            "allowed": false,
-            "disbursementAmount": 10000,
-            "installmentAmount": 1117,
-            "totalAmount": 10705,
-            "iofAmount": 205,
-            "monthlyCET": 1.85,
-            "yearlyCET": 24.604,
+            "installmentAmount": 0,
+            "description": "Limite do valor da parcela excedido.",
+            "totalAmount": 10199.82,
+            "iofAmount": 194.82,
+            "monthlyCET": 1.03,
+            "yearlyCET": 13.084,
             "monthlyFee": 0.7,
             "yearlyFee": 8.731,
             "insurance": {
@@ -279,7 +235,7 @@ Template: [simulation.yaml](./simulation.yaml)
             },
             "interestType": "pre_price_days",
             "creditOperationType": "ccb",
-            "expectedDisbursementDate": "2022-11-22",
+            "expectedDisbursementDate": "2022-11-23",
             "interestGracePeriod": 0,
             "principalGracePeriod": 0,
             "numberOfInstallments": 10,
@@ -289,7 +245,7 @@ Template: [simulation.yaml](./simulation.yaml)
                 {
                     "feeType": "tac",
                     "amountType": "absolute",
-                    "amount": 500
+                    "amount": 5
                 }
             ],
             "fine": {
@@ -297,55 +253,17 @@ Template: [simulation.yaml](./simulation.yaml)
                 "interestBase": "workdays",
                 "monthlyRate": 0.01
             },
-            "acquittanceLoans": []
+            "acquittanceLoans": [],
+            "product": "prod_63777d228ef2277060ac6463"
         },
         {
-            "allowed": true,
             "disbursementAmount": 10000,
-            "installmentAmount": 352,
-            "totalAmount": 11877,
-            "iofAmount": 377,
-            "monthlyCET": 2.31,
-            "yearlyCET": 31.527,
-            "monthlyFee": 1.5,
-            "yearlyFee": 19.561,
-            "insurance": {
-                "type": "required",
-                "amount": 179,
-                "fee": 1.79,
-                "number": "12345.1234.1234.1234.123456",
-                "insurer": "usebens"
-            },
-            "interestType": "pre_price_days",
-            "creditOperationType": "ccb",
-            "expectedDisbursementDate": "2022-11-22",
-            "interestGracePeriod": 0,
-            "principalGracePeriod": 0,
-            "numberOfInstallments": 48,
-            "firstDueDate": "2023-01-10",
-            "fund": "fund_123456",
-            "rebates": [
-                {
-                    "feeType": "tac",
-                    "amountType": "absolute",
-                    "amount": 1500
-                }
-            ],
-            "fine": {
-                "fineRate": 0.02,
-                "interestBase": "workdays",
-                "monthlyRate": 0.01
-            },
-            "acquittanceLoans": []
-        },
-        {
-            "allowed": true,
-            "disbursementAmount": 10000,
-            "installmentAmount": 469,
-            "totalAmount": 11329,
-            "iofAmount": 329,
-            "monthlyCET": 1.89,
-            "yearlyCET": 25.192,
+            "installmentAmount": 401.95,
+            "description": "",
+            "totalAmount": 10313.42,
+            "iofAmount": 303.42,
+            "monthlyCET": 1.2,
+            "yearlyCET": 15.389,
             "monthlyFee": 1,
             "yearlyFee": 12.682,
             "insurance": {
@@ -357,17 +275,17 @@ Template: [simulation.yaml](./simulation.yaml)
             },
             "interestType": "pre_price_days",
             "creditOperationType": "ccb",
-            "expectedDisbursementDate": "2022-11-22",
+            "expectedDisbursementDate": "2022-11-23",
             "interestGracePeriod": 0,
             "principalGracePeriod": 0,
-            "numberOfInstallments": 28,
+            "numberOfInstallments": 30,
             "firstDueDate": "2023-01-10",
             "fund": "fund_123456",
             "rebates": [
                 {
                     "feeType": "tac",
                     "amountType": "absolute",
-                    "amount": 1000
+                    "amount": 10
                 }
             ],
             "fine": {
@@ -375,7 +293,94 @@ Template: [simulation.yaml](./simulation.yaml)
                 "interestBase": "workdays",
                 "monthlyRate": 0.01
             },
-            "acquittanceLoans": []
+            "acquittanceLoans": [],
+            "product": "prod_63777d228ef2277060ac6463"
+        },
+        {
+            "disbursementAmount": 10000,
+            "installmentAmount": 420.02,
+            "description": "",
+            "totalAmount": 10777.06,
+            "iofAmount": 317.06,
+            "monthlyCET": 1.5,
+            "yearlyCET": 19.561,
+            "monthlyFee": 1,
+            "yearlyFee": 12.682,
+            "insurance": {
+                "type": "optional",
+                "amount": 450,
+                "fee": 4.5,
+                "number": "12345.1234.1234.1234.123456",
+                "insurer": "usebens"
+            },
+            "interestType": "pre_price_days",
+            "creditOperationType": "ccb",
+            "expectedDisbursementDate": "2022-11-23",
+            "interestGracePeriod": 0,
+            "principalGracePeriod": 0,
+            "numberOfInstallments": 30,
+            "firstDueDate": "2023-01-10",
+            "fund": "fund_123456",
+            "rebates": [
+                {
+                    "feeType": "tac",
+                    "amountType": "absolute",
+                    "amount": 10
+                },
+                {
+                    "feeType": "tac_tax_free",
+                    "amountType": "absolute",
+                    "description": "Prêmio de Seguro",
+                    "amount": 450
+                }
+            ],
+            "fine": {
+                "fineRate": 0.02,
+                "interestBase": "workdays",
+                "monthlyRate": 0.01
+            },
+            "acquittanceLoans": [],
+            "product": "prod_63777d228ef2277060ac6463"
+        },
+        {
+            "disbursementAmount": 10000,
+            "installmentAmount": 306.48,
+            "description": "",
+            "totalAmount": 10342.61,
+            "iofAmount": 327.61,
+            "monthlyCET": 1.65,
+            "yearlyCET": 21.699,
+            "monthlyFee": 1.5,
+            "yearlyFee": 19.561,
+            "insurance": {
+                "type": "required",
+                "amount": 179,
+                "fee": 1.79,
+                "number": "12345.1234.1234.1234.123456",
+                "insurer": "usebens"
+            },
+            "interestType": "pre_price_days",
+            "creditOperationType": "ccb",
+            "expectedDisbursementDate": "2022-11-23",
+            "interestGracePeriod": 0,
+            "principalGracePeriod": 0,
+            "numberOfInstallments": 48,
+            "firstDueDate": "2023-01-10",
+            "fund": "fund_123456",
+            "rebates": [
+                {
+                    "feeType": "tac",
+                    "amountType": "absolute",
+                    "amount": 15
+                }
+            ],
+            "fine": {
+                "fineRate": 0.02,
+                "interestBase": "workdays",
+                "monthlyRate": 0.01
+            },
+            "acquittanceLoans": [],
+            "product": "prod_63777d228ef2277060ac6463"
         }
     ]
 }
@@ -394,4 +399,5 @@ Template: [simulation.yaml](./simulation.yaml)
 | qitechPassphrase   | Segredo utilizado para gerar a assinatura do payload à QITech. Pode ser vazio.             |
 | qitechPrivateKey   | Chave privada utilizada para assinar o payload à QITech.                                   |
 | qitechPublicKey    | Chave pública utilizada para verificar e descriptografar a resposta retornada pela QITech. |
+| insuranceNumber    | Número da apólice do seguro.                                                               |
 

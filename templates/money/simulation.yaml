@@ -5,7 +5,7 @@ creditPolicies: &creditPoliciesCode |
       "maxWorkingMonths": 999,
       "minWorkingMonths": 1,
       "salaryQtd": 10000,
-      "minCreditRequestAmount": $.ctx.numberToAmount(100),
+      "minCreditRequestAmount": 100,
       "monthlyAndRegisterFee": [
         {
           "insuranceType": "uninsured",
@@ -38,7 +38,7 @@ creditPolicies: &creditPoliciesCode |
       "maxWorkingMonths": 10,
       "minWorkingMonths": 1,
       "salaryQtd": 0.4,
-      "minCreditRequestAmount": $.ctx.numberToAmount(1),
+      "minCreditRequestAmount": 1,
       "monthlyAndRegisterFee": [
         {
           "insuranceType": "uninsured",
@@ -338,10 +338,14 @@ nodes:
             employment:
               type: string
               pattern: ^empl_\w+$
+            product:
+              type: string
+              pattern: ^prod_\w+$
           required:
             - numberOfInstallments
             - amount
             - employment
+            - product
       next: set-ctx-constants
   set-ctx-constants:
     type: function
@@ -355,14 +359,6 @@ nodes:
         const jws = require('jws')
         const md5 = require('md5')
         const { v4: uuidV4 } = require('uuid')
-
-        $.ctx.amountToNumber = value => Number(value) / 100
-
-        $.ctx.numberToAmount = value => {
-          const [integerPart, decimalPart] = String(value).split('.')
-          const numberValue = `${integerPart}${(decimalPart || '').padEnd(2,0)}`
-          return Number(numberValue)
-        }
 
         const constants = {
           apiKey: $.secrets.qitechApiClientKey,
@@ -713,7 +709,7 @@ nodes:
           }
         }
 
-        const value = new BigNumber($.ctx.amountToNumber(amount))
+        const value = new BigNumber(amount)
           .times(fee)
           .decimalPlaces($.ctx.constants.DECIMAL_PLACES)
           .toNumber()
@@ -777,7 +773,7 @@ nodes:
             interest_grace_period: 0,
             principal_grace_period: 0,
             disbursement_date: disbursementDate,
-            disbursed_amount: $.ctx.amountToNumber(amount),
+            disbursed_amount: amount,
             interest_type: "pre_price_days",
             first_due_date: firstDueDate,
             credit_operation_type: "ccb",
@@ -840,9 +836,10 @@ nodes:
         const insurance = $.flow.nodes["simulation-qitech-insurance-calculate-insurance"][0].output
 
         const qitechInstallment = $.flow.nodes["simulation-qitech-decrypt-response"][0].output.data
+        const firstInstallment = qitechInstallment.installments[0];
 
-        function isAllowed(installment) {
-          const maxInstallmentValue = new BigNumber($.ctx.amountToNumber($.ctx.employment.limitPerInstallment))
+        function isEmployeeCanRequestInstallmentAmount(installment) {
+          const maxInstallmentValue = new BigNumber($.ctx.employment.limitPerInstallment)
           return new BigNumber(installment.total_amount).isLessThanOrEqualTo(maxInstallmentValue)
         }
 
@@ -853,13 +850,11 @@ nodes:
             .toNumber();
         };
 
-        const firstInstallment = qitechInstallment.installments[0];
-
         function createInsurance() {
           if (withInsurance) {
             return {
               type: policyRule.insuranceType,
-              amount: $.ctx.numberToAmount(insurance.value),
+              amount: insurance.value,
               fee: calculatePercentageValue(insurance.fee),
               number: $.secrets.insuranceNumber,
               insurer: $.ctx.constants.INSURANCE_INSURER,
@@ -879,28 +874,30 @@ nodes:
             {
               feeType: 'tac',
               amountType: 'absolute',
-              amount: $.ctx.numberToAmount(policyRule.registerFee),
+              amount: policyRule.registerFee,
             }
           ];
 
           if (insurance.optional) {
             rebates.push({
-              fee_type: 'tac_tax_free',
-              amount_type: 'absolute',
+              feeType: 'tac_tax_free',
+              amountType: 'absolute',
               description: 'Prêmio de Seguro',
-              amount: $.ctx.numberToAmount(insurance.value),
+              amount: insurance.value,
             })
           }
 
           return rebates;
         }
 
+        const allowed = isEmployeeCanRequestInstallmentAmount(firstInstallment)
+
         return {
-          allowed: isAllowed(firstInstallment),
           disbursementAmount: amount,
-          installmentAmount: $.ctx.numberToAmount(firstInstallment.total_amount),
-          totalAmount: $.ctx.numberToAmount(qitechInstallment.issue_amount),
-          iofAmount: $.ctx.numberToAmount(qitechInstallment.iof_amount),
+          installmentAmount: allowed ? firstInstallment.total_amount : 0,
+          description: allowed ? '' : 'Limite do valor da parcela excedido.',
+          totalAmount: qitechInstallment.issue_amount,
+          iofAmount: qitechInstallment.iof_amount,
           monthlyCET: calculatePercentageValue(qitechInstallment.cet),
           yearlyCET: calculatePercentageValue(qitechInstallment.annual_cet),
           monthlyFee: calculatePercentageValue(
@@ -925,6 +922,7 @@ nodes:
             monthlyRate: $.ctx.constants.MONTHLY_RATE,
           },
           acquittanceLoans: [],
+          product: $.nodes.request[0].output.body.product,
         };
   response:
     type: webhook-response
