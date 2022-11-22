@@ -3,9 +3,9 @@
 Templates de fluxos para cálculo de crédito.
 
 - [Calcular crédito máximo](#calcular-crédito-máximo)
-  - [Parâmetros](#parâmetros)
   - [Corpo de requisição](#corpo-de-requisição)
   - [Segredos](#segredos)
+  - [Produto](#produto)
   - [Resposta](#resposta)
 - [Requisição POST Qitech](#requisição-post-qitech)
   - [Corpo de requisição](#corpo-de-requisição-1)
@@ -24,18 +24,12 @@ Tipo: **Webhook**
 
 Template: [max-credit.yaml](./max-credit.yaml)
 
-### Parâmetros
-| Nome     | Tipo   | Obrigatório | Descrição             |
-| -------- | ------ | ----------- | --------------------- |
-| document | String | &check;     | Documento do cliente. |
-
 ### Corpo de requisição
-| Nome              | Tipo   | Obrigatório | Descrição               |
-| ----------------- | ------ | ----------- | ----------------------- |
-| consignableMargin | Number | &check;     | Margem de consignado.   |
-| fee               | Number | &check;     | Taxa de juros.          |
-| iof               | String | &check;     | Taxa do IOF.            |
-| product           | Object | &check;     | Informações do produto. |
+| Nome     | Tipo   | Obrigatório | Descrição               |
+| -------- | ------ | ----------- | ----------------------- |
+| document | String | &check;     | Documento do empregado. |
+| product  | String | &check;     | Id do produto.          |
+| metadata | Object | &cross;     | Informações adicionais. |
 
 
 <details>
@@ -43,18 +37,10 @@ Template: [max-credit.yaml](./max-credit.yaml)
 
 ```json
 {
-	"consignableMargin": 0.35,
-	"fee": 0.02,
-	"iof": 0.035,
-	"product": {
-		"slug": "Consignado",
-		"metdaData": {
-			"maxNumberOfInstallments": 12,
-			"minNumberOfInstallments": 6,
-			"minLoanAmount": 1000
-		}
-	}
+	"document": "36891294002",
+	"product": "prod_637c05622d956277578c4aa0"
 }
+
 ```
 
 </details>
@@ -65,6 +51,39 @@ Template: [max-credit.yaml](./max-credit.yaml)
 | ------------- | ---------------------------- |
 | base39BaseUrl | URL base das APIs da Base39. |
 | base39ApiKey  | Chave da API da Base39.      |
+
+### Produto
+O fluxo utiliza informações contidas no **metada** do produto, sendo elas obrigatórias.
+
+| Nome                    | Tipo    | Obrigatório | Descrição                   |
+| ----------------------- | ------- | ----------- | --------------------------- |
+| consignableMargin       | Decimal | &check;     | Margem de consignado.       |
+| monthlyFee              | Decimal | &check;     | Taxa de juros mensal.       |
+| iof                     | Decimal | &cross;     | Taxa do IOF.                |
+| maxNumberOfInstallments | Number  | &cross;     | Número máximo de parcelas.  |
+| minNumberOfInstallments | Number  | &cross;     | Número mínimo de parcelas.  |
+| minLoanAmount           | Number  | &cross;     | Valor de empréstimo mínimo. |
+
+<details>
+<summary><strong>Exemplo</strong></summary>
+
+```json
+{
+	"slug": "consignado",
+	"name": "Test workflows",
+	"status": "active",
+	"description": "test workflows",
+	"metadata": {
+		"consignableMargin": 0.35,
+		"monthlyFee": 0.02,
+		"iof": 0.035,
+		"maxNumberOfInstallments": 12,
+		"minNumberOfInstallments": 6,
+		"minLoanAmount": 1000
+	}
+}
+```
+</details>
 
 ### Resposta
 
