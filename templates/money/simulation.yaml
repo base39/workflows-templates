@@ -333,7 +333,7 @@ nodes:
                 minimum: 6
                 maximum: 48
             disbursementAmount:
-              type: integer
+              type: number
               minimum: 0
               maximum: 9007199254740991
             employment:
