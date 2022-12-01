@@ -1,39 +1,6 @@
 creditPolicies: &creditPoliciesCode |
   $.ctx.creditPolicies = [
     {
-      "name": "Default",
-      "maxWorkingMonths": 999,
-      "minWorkingMonths": 1,
-      "salaryQtd": 10000,
-      "minCreditRequestAmount": 100,
-      "monthlyAndRegisterFee": [
-        {
-          "insuranceType": "uninsured",
-          "minMonth": 1,
-          "maxMonth": 20,
-          "monthlyFee": 0.7,
-          "registerFee": 5,
-          "fund": "fund_123456",
-        },
-        {
-          "insuranceType": "optional",
-          "minMonth": 21,
-          "maxMonth": 32,
-          "monthlyFee": 1.0,
-          "registerFee": 10,
-          "fund": "fund_123456",
-        },
-        {
-          "insuranceType": "required",
-          "minMonth": 33,
-          "maxMonth": 99,
-          "monthlyFee": 1.5,
-          "registerFee": 15,
-          "fund": "fund_123456",
-        }
-      ],
-    },
-    {
       "name": "Adiantamento Salarial - PT",
       "maxWorkingMonths": 10,
       "minWorkingMonths": 1,
@@ -46,13 +13,47 @@ creditPolicies: &creditPoliciesCode |
           "maxMonth": 60,
           "monthlyFee": 1,
           "registerFee": 1,
-          "fund": "fund_123456",
+          "fund": "fund_637b85aaa8e91c82fd053aac",
         }
       ]
-    }
+    },
+    {
+      "name": "Default",
+      "maxWorkingMonths": 999,
+      "minWorkingMonths": 1,
+      "salaryQtd": 10000,
+      "minCreditRequestAmount": 100,
+      "monthlyAndRegisterFee": [
+        {
+          "insuranceType": "uninsured",
+          "minMonth": 1,
+          "maxMonth": 20,
+          "monthlyFee": 0.7,
+          "registerFee": 5,
+          "fund": "fund_637b85aaa8e91c82fd053aac",
+        },
+        {
+          "insuranceType": "optional",
+          "minMonth": 21,
+          "maxMonth": 32,
+          "monthlyFee": 1.0,
+          "registerFee": 10,
+          "fund": "fund_637b85aaa8e91c82fd053aac",
+        },
+        {
+          "insuranceType": "required",
+          "minMonth": 33,
+          "maxMonth": 42,
+          "monthlyFee": 1.5,
+          "registerFee": 15,
+          "fund": "fund_637b85aaa8e91c82fd053aac",
+        }
+      ],
+    },
   ]
 
 ctxConstants: &ctxConstantsCode |
+  $.ctx.offers = []
   $.ctx.constants = {
     MONTHLY_RATE: 0.01,
     CONTRACT_FINE_RATE: 0.02,
@@ -331,7 +332,7 @@ nodes:
                 type: number
                 minimum: 6
                 maximum: 48
-            amount:
+            disbursementAmount:
               type: integer
               minimum: 0
               maximum: 9007199254740991
@@ -343,7 +344,7 @@ nodes:
               pattern: ^prod_\w+$
           required:
             - numberOfInstallments
-            - amount
+            - disbursementAmount
             - employment
             - product
       next: set-ctx-constants
@@ -625,7 +626,7 @@ nodes:
               operation: not-present
         - next: response-error-min-credit-request
           expressions:
-            - leftValue: "{{ $.nodes.request[0].output.body.amount }}"
+            - leftValue: "{{ $.nodes.request[0].output.body.disbursementAmount }}"
               operation: less
               rightValue: '{{ $.nodes."get-credit-policy"[0].output.minCreditRequestAmount }}'
       default: simulation-installment-loop
@@ -651,13 +652,21 @@ nodes:
           .sort((a, b) => b.maxMonth - a.maxMonth);
 
         if (!applyableRules.length) {
-          throw new Error(
-            `No credit policy applies to ${installmentsNumber} installments.`
-          );
+          // `No credit policy applies to ${installmentsNumber} installments.`
+          return null;
         }
 
         return applyableRules[0];
-      next: simulation-credit-policy-insurance-type-loop-items
+      next: check-simulation-qitech-insurance-get-policy-rule
+  check-simulation-qitech-insurance-get-policy-rule:
+    type: conditional
+    parameters:
+      conditions:
+        - next: create-installment-response-no-policy-rule
+          expressions:
+            - leftValue: '{{ $.flow.nodes."simulation-qitech-insurance-get-policy-rule"[0].output }}'
+              operation: not-present
+      default: simulation-credit-policy-insurance-type-loop-items
   simulation-credit-policy-insurance-type-loop-items:
     type: function
     parameters:
@@ -694,7 +703,7 @@ nodes:
         const { BigNumber } = require("bignumber.js");
         BigNumber.set($.ctx.constants.BIG_NUMBER_CONFIG);
 
-        const { amount } = $.nodes.request[0].output.body;
+        const { disbursementAmount } = $.nodes.request[0].output.body;
         const { withInsurance, policyRule: { insuranceType } } = $.flow.loop.item
 
         let fee = 0
@@ -709,7 +718,7 @@ nodes:
           }
         }
 
-        const value = new BigNumber(amount)
+        const value = new BigNumber(disbursementAmount)
           .times(fee)
           .decimalPlaces($.ctx.constants.DECIMAL_PLACES)
           .toNumber()
@@ -728,7 +737,7 @@ nodes:
         BigNumber.set($.ctx.constants.BIG_NUMBER_CONFIG)
 
         const { installmentsNumber, policyRule } = $.flow.loop.item
-        const { amount } = $.nodes.request[0].output.body
+        const { disbursementAmount } = $.nodes.request[0].output.body
         const { firstDueDate, disbursementDate } = $.nodes["calculate-dates"][0].output
         const insurance = $.flow.nodes["simulation-qitech-insurance-calculate-insurance"][0].output
 
@@ -744,7 +753,7 @@ nodes:
           if (insurance.optional) {
             rebates.push({
               amount: insurance.value,
-              fee_type: 'tac_tax_free',
+              fee_type: 'tac',
               amount_type: 'absolute',
               description: 'Prêmio de Seguro',
             })
@@ -773,7 +782,7 @@ nodes:
             interest_grace_period: 0,
             principal_grace_period: 0,
             disbursement_date: disbursementDate,
-            disbursed_amount: amount,
+            disbursed_amount: disbursementAmount,
             interest_type: "pre_price_days",
             first_due_date: firstDueDate,
             credit_operation_type: "ccb",
@@ -830,7 +839,7 @@ nodes:
         const BigNumber = require("bignumber.js")
         BigNumber.set($.ctx.constants.BIG_NUMBER_CONFIG)
 
-        const { amount } = $.nodes.request[0].output.body
+        const { disbursementAmount } = $.nodes.request[0].output.body
         const { withInsurance, policyRule } = $.flow.loop.item
         const { disbursementDate } = $.nodes["calculate-dates"][0].output
         const insurance = $.flow.nodes["simulation-qitech-insurance-calculate-insurance"][0].output
@@ -880,7 +889,7 @@ nodes:
 
           if (insurance.optional) {
             rebates.push({
-              feeType: 'tac_tax_free',
+              feeType: 'tac',
               amountType: 'absolute',
               description: 'Prêmio de Seguro',
               amount: insurance.value,
@@ -892,8 +901,8 @@ nodes:
 
         const allowed = isEmployeeCanRequestInstallmentAmount(firstInstallment)
 
-        return {
-          disbursementAmount: amount,
+        $.ctx.offers.push({
+          disbursementAmount,
           installmentAmount: allowed ? firstInstallment.total_amount : 0,
           description: allowed ? '' : 'Limite do valor da parcela excedido.',
           totalAmount: qitechInstallment.issue_amount,
@@ -921,9 +930,56 @@ nodes:
             interestBase: 'workdays',
             monthlyRate: $.ctx.constants.MONTHLY_RATE,
           },
-          acquittanceLoans: [],
+          acquittanceLoans: {},
           product: $.nodes.request[0].output.body.product,
-        };
+        });
+  create-installment-response-no-policy-rule:
+    type: function
+    parameters:
+      code: |
+        const { disbursementAmount } = $.nodes.request[0].output.body
+        const { disbursementDate } = $.nodes["calculate-dates"][0].output
+
+        $.ctx.offers.push({
+          disbursementAmount,
+          installmentAmount: 0,
+          description: 'Número de parcelas não elegível.',
+          totalAmount: 0,
+          iofAmount: 0,
+          monthlyCET: 0,
+          yearlyCET: 0,
+          monthlyFee: 0,
+          yearlyFee: 0,
+          insurance: {
+            type: '',
+            amount: 0,
+            fee: 0,
+            number: '',
+            insurer: '',
+          },
+          interestType: '',
+          creditOperationType: 'ccb',
+          expectedDisbursementDate: disbursementDate,
+          interestGracePeriod: 0,
+          principalGracePeriod: 0,
+          numberOfInstallments: $.flow.loop.item,
+          firstDueDate: '',
+          fund: '',
+          rebates: [
+            {
+              feeType: 'tac',
+              amountType: 'absolute',
+              amount: 0,
+            }
+          ],
+          fine: {
+            fineRate: $.ctx.constants.CONTRACT_FINE_RATE,
+            interestBase: 'workdays',
+            monthlyRate: $.ctx.constants.MONTHLY_RATE,
+          },
+          acquittanceLoans: {},
+          product: $.nodes.request[0].output.body.product,
+        });
   response:
     type: webhook-response
     parameters:
@@ -931,7 +987,7 @@ nodes:
       headers:
         Content-Type: application/json
       body:
-        data: '{{$.nodes."create-installment-response"[*].output}}'
+        data: '{{$.ctx.offers}}'
   response-error-no-employment:
     type: webhook-response
     parameters:
