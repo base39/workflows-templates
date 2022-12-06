@@ -951,7 +951,7 @@ nodes:
           monthlyFee: 0,
           yearlyFee: 0,
           insurance: {
-            type: '',
+            type: null,
             amount: 0,
             fee: 0,
             number: '',
