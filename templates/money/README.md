@@ -45,12 +45,16 @@ Template: [max-credit.yaml](./max-credit.yaml)
 
 </details>
 
+<br>
+
 ### Segredos
 
 | Nome          | Descrição                    |
 | ------------- | ---------------------------- |
 | base39BaseUrl | URL base das APIs da Base39. |
 | base39ApiKey  | Chave da API da Base39.      |
+
+<br>
 
 ### Produto
 O fluxo utiliza informações contidas no **metada** do produto, sendo elas obrigatórias.
@@ -84,6 +88,8 @@ O fluxo utiliza informações contidas no **metada** do produto, sendo elas obri
 }
 ```
 </details>
+
+<br>
 
 ### Resposta
 
@@ -179,6 +185,8 @@ Template: [request-qitech-post.yaml](./request-qitech-post.yaml)
 
 </details>
 
+<br>
+
 ### Segredos
 
 | Nome               | Descrição                                                                                  |
@@ -202,9 +210,11 @@ Template: [simulation.yaml](./simulation.yaml)
 | -------------------- | ------------------- | ----------- | ---------------------------------------------------------------------------- |
 | numberOfInstallments | Array&lt;String&gt; | &check;     | Lista dos parcelamentos para serem calculados.                               |
 | amount               | Number              | &check;     | Valor do empréstimo a ser simulado.                                          |
+| customer             | String              | &cross;*    | Identificador do cliente que solicitou o empréstimo.                         |
 | employment           | String              | &check;     | Identificador do vínculo empregatício do cliente que solicitou o empréstimo. |
 | product              | String              | &check;     | Identificador do produto ao qual a oferta foi calculada.                     |
 
+\* Todos os campos serão sempre enviados pelo Core&Lending da Base39, independente de serem obrigatórios ou não para o fluxo. Campos marcados como não obrigatórios não são utilizados no template.
 
 <details>
     <summary><strong>Exemplo</strong></summary>
@@ -212,16 +222,18 @@ Template: [simulation.yaml](./simulation.yaml)
 ```json
 {
     "numberOfInstallments": [
-        6,
-        12,
-        24
+        10, 30, 48
     ],
-    "amount": 999,
-    "customer": "cust_abcdef123456"
+    "disbursementAmount": 100,
+    "customer": "cust_636d0a271891c7900ed9aaad",
+    "employment": "empl_636d0bfd4089fa75c70229a6",
+    "product": "prod_63777d228ef2277060ac6463"
 }
 ```
 
 </details>
+
+<br>
 
 ### Resposta
 
@@ -406,6 +418,8 @@ Template: [simulation.yaml](./simulation.yaml)
 ```
 
 </details>
+
+<br>
 
 ### Segredos
 
