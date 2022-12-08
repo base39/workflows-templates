@@ -35,11 +35,11 @@ nodes:
     parameters:
       timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
       method: GET
+      url: "{{ $.ctx.base39.baseUrl }}/customers"
       headers: &base39ApiHeader
         "Content-Type": application/json
         "accept": "application/json"
         "x-api-key": "{{ $.secrets.base39ApiKey }}"
-      url: "{{ $.ctx.base39.baseUrl }}/customers"
       queryParameters:
         document: "{{ $.nodes.webhook[0].output.body.document }}"
       ignoreResponseCode: true
@@ -91,22 +91,16 @@ nodes:
             - leftValue: '{{ $.nodes."find-product"[0].output.status }}'
               operation: not-equal
               rightValue: 200
-      default: find-companies
-  find-companies:
-    type: loop
-    parameters:
-      items: '{{ $.nodes."find-employments"[0].output.responseData.data[*].company }}'
-      starterNode: find-company
-      concurrency: 10
-      next: find-open-loans
-  find-company:
-    type: http-request
-    parameters:
-      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
-      method: GET
-      headers: *base39ApiHeader
-      url: "{{ $.ctx.base39.baseUrl }}/companies/{{ $.flow.loop.item }}"
-      ignoreResponseCode: true
+        - next: response-error-metadata
+          operator: or
+          expressions:
+            - leftValue: '{{ $.nodes."find-product"[0].output.responseData.metadata.iof }}'
+              operation: not-present
+            - leftValue: '{{ $.nodes."find-product"[0].output.responseData.metadata.monthlyFee }}'
+              operation: not-present
+            - leftValue: '{{ $.nodes."find-product"[0].output.responseData.metadata.maxNumberOfInstallments }}'
+              operation: not-present
+      default: find-open-loans
   find-open-loans:
     type: http-request
     parameters:
@@ -225,7 +219,7 @@ nodes:
         }
 
         function sumTotalAmount(acc, installment) {
-          return acc + (installment.totalAmount * 100)
+          return acc + installment.totalAmount
         }
 
         function sumInstallmentsTotalAmount(acc, execution) {
@@ -254,8 +248,8 @@ nodes:
     parameters:
       code: |
         const maxInstallmentReduction = $.nodes["sum-loans"][0].output.totalInstallments
-        const netSalary = $.flow.loop.item.netSalary / 100
-        const limitPerInstallment = $.flow.loop.item.limitPerInstallment / 100
+        const netSalary = $.flow.loop.item.netSalary
+        const limitPerInstallment = $.flow.loop.item.limitPerInstallment
         const { metadata } = $.nodes['find-product'][0].output.responseData
 
         let margin = metadata && metadata.consignableMargin ? metadata.consignableMargin : 0.35
@@ -276,8 +270,8 @@ nodes:
 
         const { iof, monthlyFee, maxNumberOfInstallments } = $.nodes['find-product'][0].output.responseData.metadata
 
-        const grossSalary = $.flow.loop.item.grossSalary / 100
-        const limitPerLoan = $.flow.loop.item.limitPerLoan / 100
+        const grossSalary = $.flow.loop.item.grossSalary
+        const limitPerLoan = $.flow.loop.item.limitPerLoan
         const maxCreditReduction = $.nodes["sum-loans"][0].output.totalInstallments + grossSalary * iof
         const maxInstallmentValue = $.flow.nodes["calculate-max-installment"][0].output
 
@@ -331,12 +325,12 @@ nodes:
           slug: $.nodes['find-product'][0].output.responseData.slug,
           name: $.nodes['find-product'][0].output.responseData.name,
           description:$.nodes['find-product'][0].output.responseData.description,
-          maxLoanAmount: maxCredit * 100,
-          minLoanAmount: minLoanAmount * 100,
+          maxLoanAmount: maxCredit,
+          minLoanAmount,
           maxNumberOfInstallments,
           minNumberOfInstallments,
-          maxInstallmentValue: maxInstallment * 100,
-          minInstallmentValue: minInstallmentValue * 100,
+          maxInstallmentValue: maxInstallment,
+          minInstallmentValue,
           customer: $.nodes['find-customer'][0].output.responseData.data[0].id,
           employment: $.flow.loop.item.id,
           available: true,
@@ -354,3 +348,9 @@ nodes:
       statusCode: 404
       body:
         data: []
+  response-error-metadata:
+    type: webhook-response
+    parameters:
+      statusCode: 400
+      body:
+        message: O produto não possui cadastro de metadados.

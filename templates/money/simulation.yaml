@@ -508,6 +508,7 @@ nodes:
       ignoreResponseCode: true
       queryParameters:
         document: '{{ $.nodes."request-customer-data"[0].output.responseData.document }}'
+        expand: company
       timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
       next: check-employment-data
   check-employment-data:
@@ -519,37 +520,23 @@ nodes:
             - leftValue: '{{ $.nodes."request-employment-data"[0].output.status }}'
               operation: not-equal
               rightValue: 200
+        - next: response-error-no-company
+          expressions:
+            - leftValue: '{{ $.nodes."request-employment-data"[0].output.responseData.company }}'
+              operation: empty
       default: set-ctx-employment
   set-ctx-employment:
     type: function
     parameters:
       code: $.ctx.employment = $.nodes['request-employment-data'][0].output.responseData
-      next: request-company-data
-  request-company-data:
-    type: http-request
-    parameters:
-      method: GET
-      url: "{{ $.secrets.base39BaseUrl }}/v1/companies/{{ $.ctx.employment.company }}"
-      headers: *base39ApiHeaders
-      ignoreResponseCode: true
-      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
       next: calculate-dates
-  check-request-company-data:
-    type: conditional
-    parameters:
-      conditions:
-        - next: response-error-no-company
-          expressions:
-            - leftValue: '{{ $.nodes."request-company-data"[0].output.responseData }}'
-              operation: empty
-      default: set-ctx-employment
   calculate-dates:
     type: function
     parameters:
       code: |
         const { startOfDay, differenceInMonths } = require('date-fns')
 
-        const { payrollPaymentDay } = $.nodes["request-company-data"][0].output.responseData.settings
+        const { payrollPaymentDay } = $.ctx.employment.company.settings
         const { hiredAt } = $.ctx.employment
 
         function createDate(stringDate) {
