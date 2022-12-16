@@ -296,8 +296,8 @@ nodes:
         }
 
         const maxInstallmentReduction = $.nodes["sum-loans"][0].output.totalInstallments
-        const netSalary = $.flow.loop.item.netSalary
-        const limitPerInstallment = $.flow.loop.item.limitPerInstallment
+        const netSalary = $.flow.loop.item.netSalary || 0
+        const limitPerInstallment = $.flow.loop.item.limitPerInstallment || 0
         const { metadata } = $.nodes['find-product'][0].output.responseData
         let margin = metadata && metadata.consignableMargin ? metadata.consignableMargin : 0.35
         const estimatedMaxInstallment = netSalary * margin
@@ -319,8 +319,8 @@ nodes:
         const { differenceInDays, startOfDay, addMonths } = require('date-fns')
         const BigNumber = require('bignumber.js')
         const { iof, monthlyFee, maxNumberOfInstallments } = $.nodes['find-product'][0].output.responseData.metadata
-        const grossSalary = $.flow.loop.item.grossSalary
-        const limitPerLoan = $.flow.loop.item.limitPerLoan
+        const grossSalary = $.flow.loop.item.grossSalary || 0
+        const limitPerLoan = $.flow.loop.item.limitPerLoan || 0
         const maxCreditReduction = $.nodes["sum-loans"][0].output.totalInstallments + grossSalary * iof
         const maxInstallmentValue = $.flow.nodes["calculate-max-installment"][0].output
         const firstDueDate = new Date()
@@ -398,7 +398,7 @@ nodes:
       code: |
         const { maxCredit, maxInstallment, minInstallmentValue } = $.flow.nodes['round-values'][0].output
         const { maxNumberOfInstallments, minNumberOfInstallments, minLoanAmount } = $.nodes['find-product'][0].output.responseData.metadata
-        const { available, reason } = $.nodes['verify-availability'][0].output
+        const { available, reason } = $.flow.nodes['verify-availability'][0].output
         return {
           slug: $.nodes['find-product'][0].output.responseData.slug,
           name: $.nodes['find-product'][0].output.responseData.name,
