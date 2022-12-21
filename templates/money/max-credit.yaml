@@ -132,28 +132,25 @@ nodes:
 
         const inProgresStatus = ['open', 'disbursed', 'pending']
 
-        function hasProduct(count, loan) {
-          return inProgresStatus.includes(loan.status) ? count + 1 : count
+        function hasProduct(acc, loan) {
+          if (inProgresStatus.includes(loan.status)) {
+            acc.push(loan.employment)
+          }
+          return acc
         }
 
         function reduceExecutions(acc, execution) {
-          return acc + execution.output.responseData.data.reduce(hasProduct, 0)
+          acc.push(execution.output.responseData.data.reduce(hasProduct, []))
+          return acc.flat()
         }
 
-        const loansCount = findLoansExecutions.reduce(reduceExecutions, 0)
+        const employmentsWithProduct = findLoansExecutions.reduce(reduceExecutions, [])
 
-        return loansCount > 0
-      next: check-has-loan-with-product-in-progress
-  check-has-loan-with-product-in-progress:
-    type: conditional
-    parameters:
-      conditions:
-        - next: calculate-loop
-          expressions:
-            - leftValue: '{{ $.nodes."has-loan-with-product-in-progress"[0].output }}'
-              operation: equal
-              rightValue: true
-      default: find-open-loans
+        return {
+          hasLoanWithProduct: !!employmentsWithProduct.length,
+          employmentList: employmentsWithProduct
+        }
+      next: find-open-loans
   find-open-loans:
     type: http-request
     parameters:
@@ -290,8 +287,8 @@ nodes:
     type: function
     parameters:
       code: |
-        const hasLoanWithProduct = $.nodes['has-loan-with-product-in-progress'][0].output
-        if( hasLoanWithProduct ) {
+        const { hasLoanWithProduct, employmentList }= $.nodes['has-loan-with-product-in-progress'][0].output
+        if( hasLoanWithProduct && employmentList.includes($.flow.loop.item.id) ) {
           return 0
         }
 
@@ -311,8 +308,8 @@ nodes:
     type: function
     parameters:
       code: |
-        const hasLoanWithProduct = $.nodes['has-loan-with-product-in-progress'][0].output
-        if( hasLoanWithProduct ) {
+        const { hasLoanWithProduct, employmentList }= $.nodes['has-loan-with-product-in-progress'][0].output
+        if( hasLoanWithProduct && employmentList.includes($.flow.loop.item.id) ) {
           return 0
         }
 
@@ -364,9 +361,9 @@ nodes:
       code: |
         const { maxCredit, maxInstallment, minInstallmentValue } = $.flow.nodes['round-values'][0].output
         const { minLoanAmount } = $.nodes['find-product'][0].output.responseData.metadata
-        const hasLoanWithProduct = $.nodes['has-loan-with-product-in-progress'][0].output
+        const { hasLoanWithProduct, employmentList }= $.nodes['has-loan-with-product-in-progress'][0].output
 
-        if (hasLoanWithProduct) {
+        if (hasLoanWithProduct && employmentList.includes($.flow.loop.item.id)) {
           return {
             available: false,
             reason: 'Customer has a loan in progress.'
