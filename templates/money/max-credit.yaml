@@ -219,34 +219,7 @@ nodes:
           openedLoans,
           disbursedLoans
         }
-      next: find-loans-installments
-  find-loans-installments:
-    type: loop
-    parameters:
-      items: '{{ $.nodes."merge-loans"[0].output.loansIds }}'
-      starterNode: find-installments
-      concurrency: 10
       next: sum-loans
-  find-installments:
-    type: http-request
-    parameters:
-      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
-      method: GET
-      headers: *base39ApiHeader
-      queryParameters:
-        limit: 100
-        starting_after: '{{ $.nodes."find-installments"[-1].output.responseData.data[-1].id }}'
-      url: "{{ $.ctx.base39.baseUrl }}/loans/{{ $.flow.loop.item }}/installments"
-      next: find-installments-check-pagination
-  find-installments-check-pagination:
-    type: conditional
-    parameters:
-      conditions:
-        - next: find-installments
-          expressions:
-            - leftValue: '{{ $.nodes."find-installments"[-1].output.responseData.hasMore }}'
-              operation: equal
-              rightValue: true
   sum-loans:
     type: function
     parameters:
@@ -258,20 +231,23 @@ nodes:
           ...disbursedLoans,
           ...openedLoans
         ]
-         function sumInstallments(acc, loan) {
+        function sumInstallmentValue(acc, loan) {
           return acc + (!!loan.installments.data[0]?.totalAmount ? loan.installments.data[0].totalAmount : 0)
         }
-        function sumTotalAmount(acc, installment) {
-          return acc + installment.totalAmount
+
+        function sumUnpaindInstallments(acc, installment) {
+          console.log(installment.totalAmount)
+          return acc + (installment.status === 'unpaid' ? installment.totalAmount : 0)
         }
-        function sumInstallmentsTotalAmount(acc, execution) {
-          return acc + execution.output.responseData.data.reduce(sumTotalAmount, 0)
-        }       
-        const totalAmount = findInstallmentExecutions ? findInstallmentExecutions.reduce(sumInstallmentsTotalAmount, 0) : 0
-        const totalInstallments = loans ? loans.reduce(sumInstallments, 0) : 0
+
+        function sumInstallmentsTotalAmount(acc, loan) {
+          return acc + loan.installments.data.reduce(sumUnpaindInstallments, 0)
+        }
+        const totalAmount = loans ? loans.reduce(sumInstallmentsTotalAmount, 0) : 0
+        const totalInstallmentPerMonth = loans ? loans.reduce(sumInstallmentValue, 0) : 0
         const totalDisbursedLoans = disbursedLoans ? disbursedLoans.length : 0
         return {
-          totalInstallments,
+          totalInstallmentPerMonth,
           totalAmount,
           totalDisbursedLoans
         }
@@ -292,7 +268,7 @@ nodes:
           return 0
         }
 
-        const maxInstallmentReduction = $.nodes["sum-loans"][0].output.totalInstallments
+        const maxInstallmentReduction = $.nodes["sum-loans"][0].output.totalInstallmentPerMonth
         const netSalary = $.flow.loop.item.netSalary || 0
         const limitPerInstallment = $.flow.loop.item.limitPerInstallment || 0
         const { metadata } = $.nodes['find-product'][0].output.responseData
@@ -318,7 +294,7 @@ nodes:
         const { iof, monthlyFee, maxNumberOfInstallments } = $.nodes['find-product'][0].output.responseData.metadata
         const grossSalary = $.flow.loop.item.grossSalary || 0
         const limitPerLoan = $.flow.loop.item.limitPerLoan || 0
-        const maxCreditReduction = $.nodes["sum-loans"][0].output.totalInstallments + grossSalary * iof
+        const maxCreditReduction = $.nodes["sum-loans"][0].output.totalAmount + grossSalary * iof
         const maxInstallmentValue = $.flow.nodes["calculate-max-installment"][0].output
         const firstDueDate = new Date()
         let sum = 0
