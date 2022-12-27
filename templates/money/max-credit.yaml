@@ -130,7 +130,7 @@ nodes:
       code: |
         const findLoansExecutions = $.nodes['find-loans-by-product']
 
-        const inProgresStatus = ['open', 'disbursed', 'pending']
+        const inProgresStatus = ['open', 'disbursing', 'pending']
 
         function hasProduct(acc, loan) {
           if (inProgresStatus.includes(loan.status)) {
@@ -158,7 +158,7 @@ nodes:
       method: GET
       headers: *base39ApiHeader
       queryParameters:
-        customer: '{{ $.nodes."find-customer".output.responseData.data[0].id }}'
+        customer: '{{ $.nodes."find-customer"[0].output.responseData.data[0].id }}'
         status: open
         limit: 100
         starting_after: '{{ $.nodes."find-open-loans"[-1].output.responseData.data[-1].id }}'
@@ -181,7 +181,7 @@ nodes:
       method: GET
       headers: *base39ApiHeader
       queryParameters:
-        customer: '{{ $.nodes."find-customer".output.responseData.data[0].id }}'
+        customer: '{{ $.nodes."find-customer"[0].output.responseData.data[0].id }}'
         status: disbursed
         limit: 100
         starting_after: '{{ $.nodes."find-disbursed-loans"[-1].output.responseData.data[-1].id }}'
@@ -231,13 +231,19 @@ nodes:
           ...disbursedLoans,
           ...openedLoans
         ]
+
+        function isInstallmentUnpaid(installment){
+          return installment.status === 'unpaid'
+        }
+
         function sumInstallmentValue(acc, loan) {
-          return acc + (!!loan.installments.data[0]?.totalAmount ? loan.installments.data[0].totalAmount : 0)
+          const firstInstallment = loan.installments.data[0]
+          return acc + (!!firstInstallment && isInstallmentUnpaid(firstInstallment) ? firstInstallment.totalAmount : 0)
         }
 
         function sumUnpaindInstallments(acc, installment) {
           console.log(installment.totalAmount)
-          return acc + (installment.status === 'unpaid' ? installment.totalAmount : 0)
+          return acc + (isInstallmentUnpaid(installment) ? installment.totalAmount : 0)
         }
 
         function sumInstallmentsTotalAmount(acc, loan) {
@@ -270,7 +276,7 @@ nodes:
 
         const maxInstallmentReduction = $.nodes["sum-loans"][0].output.totalInstallmentPerMonth
         const netSalary = $.flow.loop.item.netSalary || 0
-        const limitPerInstallment = $.flow.loop.item.limitPerInstallment || 0
+        const limitPerInstallment = $.flow.loop.item?.limitPerInstallment || false
         const { metadata } = $.nodes['find-product'][0].output.responseData
         let margin = metadata && metadata.consignableMargin ? metadata.consignableMargin : 0.35
         const estimatedMaxInstallment = netSalary * margin
@@ -293,7 +299,7 @@ nodes:
         const BigNumber = require('bignumber.js')
         const { iof, monthlyFee, maxNumberOfInstallments } = $.nodes['find-product'][0].output.responseData.metadata
         const grossSalary = $.flow.loop.item.grossSalary || 0
-        const limitPerLoan = $.flow.loop.item.limitPerLoan || 0
+        const limitPerLoan = $.flow.loop.item?.limitPerLoan || false
         const maxCreditReduction = $.nodes["sum-loans"][0].output.totalAmount + grossSalary * iof
         const maxInstallmentValue = $.flow.nodes["calculate-max-installment"][0].output
         const firstDueDate = new Date()
