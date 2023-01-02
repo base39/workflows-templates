@@ -13,7 +13,7 @@ creditPolicies: &creditPoliciesCode |
           "maxMonth": 60,
           "monthlyFee": 1,
           "registerFee": 1,
-          "fund": "fund_637b85aaa8e91c82fd053aac",
+          "fund": "fund_63af1f59e67f85c6f17caabb",
         }
       ]
     },
@@ -30,7 +30,7 @@ creditPolicies: &creditPoliciesCode |
           "maxMonth": 20,
           "monthlyFee": 0.7,
           "registerFee": 5,
-          "fund": "fund_637b85aaa8e91c82fd053aac",
+          "fund": "fund_63af1f59e67f85c6f17caabb",
         },
         {
           "insuranceType": "optional",
@@ -38,7 +38,7 @@ creditPolicies: &creditPoliciesCode |
           "maxMonth": 32,
           "monthlyFee": 1.0,
           "registerFee": 10,
-          "fund": "fund_637b85aaa8e91c82fd053aac",
+          "fund": "fund_63af1f59e67f85c6f17caabb",
         },
         {
           "insuranceType": "required",
@@ -46,7 +46,7 @@ creditPolicies: &creditPoliciesCode |
           "maxMonth": 42,
           "monthlyFee": 1.5,
           "registerFee": 15,
-          "fund": "fund_637b85aaa8e91c82fd053aac",
+          "fund": "fund_63af1f59e67f85c6f17caabb",
         }
       ],
     },
@@ -61,7 +61,7 @@ ctxConstants: &ctxConstantsCode |
     REQUIRED_INSURANCE_FEE: 0.0179,
     INSURANCE_INSURER: 'usebens',
     HTTP_REQUEST_TIMEOUT: 90000,
-    DECIMAL_PLACES: 3,
+    DECIMAL_PLACES: 2,
     BIG_NUMBER_CONFIG: {
       ROUNDING_MODE: 1,
     },
@@ -352,6 +352,141 @@ nodes:
     type: function
     parameters:
       code: *ctxConstantsCode
+      next: request-employment-data
+  request-employment-data:
+    type: http-request
+    parameters:
+      method: GET
+      url: "{{ $.secrets.base39BaseUrl }}/v1/employments/{{ $.nodes.request[0].output.body.employment }}"
+      headers: *base39ApiHeaders
+      ignoreResponseCode: true
+      queryParameters:
+        document: '{{ $.nodes."request-customer-data"[0].output.responseData.document }}'
+        expand: company
+      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
+      next: check-employment-data
+  check-employment-data:
+    type: conditional
+    parameters:
+      conditions:
+        - next: response-error-no-employment
+          expressions:
+            - leftValue: '{{ $.nodes."request-employment-data"[0].output.status }}'
+              operation: not-equal
+              rightValue: 200
+        - next: response-error-no-company
+          expressions:
+            - leftValue: '{{ $.nodes."request-employment-data"[0].output.responseData.company }}'
+              operation: empty
+      default: set-ctx-employment
+  set-ctx-employment:
+    type: function
+    parameters:
+      code: $.ctx.employment = $.nodes['request-employment-data'][0].output.responseData
+      next: calculate-dates
+  calculate-dates:
+    type: function
+    parameters:
+      code: |
+        const { startOfDay, differenceInMonths } = require('date-fns')
+
+        const { payrollPaymentDay } = $.ctx.employment.company.settings
+        const { hiredAt } = $.ctx.employment
+
+        function createDate(stringDate) {
+          return startOfDay(stringDate ? new Date(stringDate) : new Date())
+        }
+
+        function calculateEmployeeWorkingMonths() {
+          return differenceInMonths(
+            createDate(),
+            createDate(hiredAt),
+          )
+        }
+
+        function calculateCompanyFirstDueDate() {
+          const currentDate = createDate()
+          return new Date(currentDate.getFullYear(), currentDate.getMonth() + 2, payrollPaymentDay)
+        }
+
+        function calculateNextBusinessDay() {
+          const date = createDate()
+
+          let dayOffset
+          if ($.nodes.request[0].output.body.metadata?.disburseDayAfter !== undefined) {
+            dayOffset = Number($.nodes.request[0].output.body.metadata.disburseDayAfter)
+          } else {
+            dayOffset = 1
+          }
+
+          if (dayOffset > 0) {
+            do {
+              date.setDate(date.getDate() + dayOffset)
+            } while (isWeekend(date) || isHoliday(date))
+          }
+
+          return date
+        }
+
+        function isWeekend(date) {
+          return !(date.getDay() % 6)
+        }
+
+        function isHoliday(date) {
+          return $.ctx.constants.HOLIDAYS.includes(formatDate(date))
+        }
+
+        function formatDate(date) {
+          return date.toISOString().split('T')[0]
+        }
+
+        return {
+          workingMonths: calculateEmployeeWorkingMonths(),
+          firstDueDate: formatDate(calculateCompanyFirstDueDate()),
+          disbursementDate: formatDate(calculateNextBusinessDay()),
+        }
+      next: set-ctx-credit-policy-list
+  set-ctx-credit-policy-list:
+    type: function
+    parameters:
+      code: *creditPoliciesCode
+      next: get-credit-policy
+  get-credit-policy:
+    type: function
+    parameters:
+      code: |
+        const policies = $.ctx.creditPolicies
+        const { workingMonths } = $.nodes["calculate-dates"][0].output
+
+        const applyableCreditPolicies = policies.filter(policy => {
+          const minWorkingMonthsRule = policy.minWorkingMonths <= workingMonths
+          const maxWorkingMonthsRule = !policy.maxWorkingMonths || policy.maxWorkingMonths >= workingMonths
+          return minWorkingMonthsRule && maxWorkingMonthsRule
+        })
+
+        return applyableCreditPolicies.length ? applyableCreditPolicies[0] : null
+      next: check-credit-policy
+  check-credit-policy:
+    type: conditional
+    parameters:
+      conditions:
+        - next: response-error-no-credit-policy
+          expressions:
+            - leftValue: '{{ $.nodes."get-credit-policy"[0].output }}'
+              operation: not-present
+        - next: response-error-min-credit-request
+          expressions:
+            - leftValue: "{{ $.nodes.request[0].output.body.disbursementAmount }}"
+              operation: less
+              rightValue: '{{ $.nodes."get-credit-policy"[0].output.minCreditRequestAmount }}'
+      default: request-tenant-settings-qitech
+  request-tenant-settings-qitech:
+    type: http-request
+    parameters:
+      method: GET
+      url: "{{ $.secrets.base39BaseUrl }}/v1/tenants/settings/disbursement"
+      headers: *base39ApiHeaders
+      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
       next: set-ctx-functions
   set-ctx-functions:
     type: function
@@ -362,10 +497,10 @@ nodes:
         const { v4: uuidV4 } = require('uuid')
 
         const constants = {
-          apiKey: $.secrets.qitechApiClientKey,
-          privateKey: $.secrets.qitechPrivateKey,
-          publicKey: $.secrets.qitechPublicKey,
-          passphrase: $.secrets.qitechPassphrase,
+          apiKey: $.nodes["request-tenant-settings-qitech"][0].output.responseData.disbursement.credentials.apiKey,
+          privateKey: $.nodes["request-tenant-settings-qitech"][0].output.responseData.disbursement.credentials.privateKey,
+          publicKey: $.nodes["request-tenant-settings-qitech"][0].output.responseData.disbursement.credentials.publicKey,
+          passphrase: '',
           algorithm: 'ES512',
           encoding: 'utf8',
         }
@@ -479,7 +614,7 @@ nodes:
 
           const headers = {
             ...headerToSign,
-            'API-CLIENT-KEY': $.secrets.qitech_api_client_key,
+            'API-CLIENT-KEY': constants.apiKey,
             Authorization: authorization
           }
 
@@ -498,125 +633,7 @@ nodes:
           const { encoded_body: encodedBody } = qiTechResponse
           return decode(encodedBody)
         }
-      next: request-employment-data
-  request-employment-data:
-    type: http-request
-    parameters:
-      method: GET
-      url: "{{ $.secrets.base39BaseUrl }}/v1/employments/{{ $.nodes.request[0].output.body.employment }}"
-      headers: *base39ApiHeaders
-      ignoreResponseCode: true
-      queryParameters:
-        document: '{{ $.nodes."request-customer-data"[0].output.responseData.document }}'
-        expand: company
-      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
-      next: check-employment-data
-  check-employment-data:
-    type: conditional
-    parameters:
-      conditions:
-        - next: response-error-no-employment
-          expressions:
-            - leftValue: '{{ $.nodes."request-employment-data"[0].output.status }}'
-              operation: not-equal
-              rightValue: 200
-        - next: response-error-no-company
-          expressions:
-            - leftValue: '{{ $.nodes."request-employment-data"[0].output.responseData.company }}'
-              operation: empty
-      default: set-ctx-employment
-  set-ctx-employment:
-    type: function
-    parameters:
-      code: $.ctx.employment = $.nodes['request-employment-data'][0].output.responseData
-      next: calculate-dates
-  calculate-dates:
-    type: function
-    parameters:
-      code: |
-        const { startOfDay, differenceInMonths } = require('date-fns')
-
-        const { payrollPaymentDay } = $.ctx.employment.company.settings
-        const { hiredAt } = $.ctx.employment
-
-        function createDate(stringDate) {
-          return startOfDay(stringDate ? new Date(stringDate) : new Date())
-        }
-
-        function calculateEmployeeWorkingMonths() {
-          return differenceInMonths(
-            createDate(),
-            createDate(hiredAt),
-          )
-        }
-
-        function calculateCompanyFirstDueDate() {
-          const currentDate = createDate()
-          return new Date(currentDate.getFullYear(), currentDate.getMonth() + 2, payrollPaymentDay)
-        }
-
-        function calculateNextBusinessDay() {
-          const date = createDate()
-
-          do {
-            date.setDate(date.getDate() + 1)
-          } while (isWeekend(date) || isHoliday(date))
-
-          return date
-        }
-
-        function isWeekend(date) {
-          return !(date.getDay() % 6)
-        }
-
-        function isHoliday(date) {
-          return $.ctx.constants.HOLIDAYS.includes(formatDate(date))
-        }
-
-        function formatDate(date) {
-          return date.toISOString().split('T')[0]
-        }
-
-        return {
-          workingMonths: calculateEmployeeWorkingMonths(),
-          firstDueDate: formatDate(calculateCompanyFirstDueDate()),
-          disbursementDate: formatDate(calculateNextBusinessDay()),
-        }
-      next: set-ctx-credit-policy-list
-  set-ctx-credit-policy-list:
-    type: function
-    parameters:
-      code: *creditPoliciesCode
-      next: get-credit-policy
-  get-credit-policy:
-    type: function
-    parameters:
-      code: |
-        const policies = $.ctx.creditPolicies
-        const { workingMonths } = $.nodes["calculate-dates"][0].output
-
-        const applyableCreditPolicies = policies.filter(policy => {
-          const minWorkingMonthsRule = policy.minWorkingMonths <= workingMonths
-          const maxWorkingMonthsRule = !policy.maxWorkingMonths || policy.maxWorkingMonths >= workingMonths
-          return minWorkingMonthsRule && maxWorkingMonthsRule
-        })
-
-        return applyableCreditPolicies.length ? applyableCreditPolicies[0] : null
-      next: check-credit-policy
-  check-credit-policy:
-    type: conditional
-    parameters:
-      conditions:
-        - next: response-error-no-credit-policy
-          expressions:
-            - leftValue: '{{ $.nodes."get-credit-policy"[0].output }}'
-              operation: not-present
-        - next: response-error-min-credit-request
-          expressions:
-            - leftValue: "{{ $.nodes.request[0].output.body.disbursementAmount }}"
-              operation: less
-              rightValue: '{{ $.nodes."get-credit-policy"[0].output.minCreditRequestAmount }}'
-      default: simulation-installment-loop
+      next: simulation-installment-loop
   simulation-installment-loop:
     type: loop
     parameters:
@@ -787,9 +804,9 @@ nodes:
     type: http-request
     parameters:
       method: POST
-      url: "{{ $.secrets.qitechBaseUrl }}/debt_simulation"
+      url: '{{ $.nodes."request-tenant-settings-qitech"[0].output.responseData.disbursement.credentials.url }}/debt_simulation'
       headers:
-        API-CLIENT-KEY: "{{$.secrets.qitechApiClientKey}}"
+        API-CLIENT-KEY: '{{$.nodes."request-tenant-settings-qitech"[0].output.responseData.disbursement.credentials.apiKey}}'
         Authorization: '{{$.flow.nodes."simulation-qitech-encrypt-payload"[0].output.authorization}}'
         Accept: application/json
         Content-Type: application/json
@@ -905,12 +922,12 @@ nodes:
           insurance: createInsurance(),
           interestType: qitechInstallment.interest_type,
           creditOperationType: 'ccb',
-          expectedDisbursementDate: disbursementDate,
+          expectedDisbursementDate: `${disbursementDate}T23:59:59.999Z`,
           interestGracePeriod: qitechInstallment.interest_grace_period,
           principalGracePeriod: qitechInstallment.principal_grace_period,
           numberOfInstallments: qitechInstallment.installments.length,
           firstDueDate: firstInstallment.due_date,
-          fund: policyRule.fund,
+          fund: $.nodes.request[0].output.body.metadata?.fund || policyRule.fund,
           rebates: createRebates(),
           fine: {
             fineRate: $.ctx.constants.CONTRACT_FINE_RATE,
