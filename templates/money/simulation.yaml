@@ -420,9 +420,11 @@ nodes:
           }
 
           if (dayOffset > 0) {
-            do {
-              date.setDate(date.getDate() + dayOffset)
-            } while (isWeekend(date) || isHoliday(date))
+            date.setDate(date.getDate() + dayOffset)
+          }
+
+          while (isWeekend(date) || isHoliday(date)) {
+            date.setDate(date.getDate() + 1)
           }
 
           return date
@@ -922,7 +924,7 @@ nodes:
           insurance: createInsurance(),
           interestType: qitechInstallment.interest_type,
           creditOperationType: 'ccb',
-          expectedDisbursementDate: `${disbursementDate}T23:59:59.999Z`,
+          expectedDisbursementDate: disbursementDate,
           interestGracePeriod: qitechInstallment.interest_grace_period,
           principalGracePeriod: qitechInstallment.principal_grace_period,
           numberOfInstallments: qitechInstallment.installments.length,
@@ -991,7 +993,7 @@ nodes:
       headers:
         Content-Type: application/json
       body:
-        data: '{{$.ctx.offers}}'
+        data: "{{$.ctx.offers}}"
   response-error-no-employment:
     type: webhook-response
     parameters:
