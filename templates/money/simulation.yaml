@@ -13,7 +13,6 @@ creditPolicies: &creditPoliciesCode |
           "maxMonth": 60,
           "monthlyFee": 1,
           "registerFee": 1,
-          "fund": "fund_63af1f59e67f85c6f17caabb",
         }
       ]
     },
@@ -30,7 +29,6 @@ creditPolicies: &creditPoliciesCode |
           "maxMonth": 20,
           "monthlyFee": 0.7,
           "registerFee": 5,
-          "fund": "fund_63af1f59e67f85c6f17caabb",
         },
         {
           "insuranceType": "optional",
@@ -38,7 +36,6 @@ creditPolicies: &creditPoliciesCode |
           "maxMonth": 32,
           "monthlyFee": 1.0,
           "registerFee": 10,
-          "fund": "fund_63af1f59e67f85c6f17caabb",
         },
         {
           "insuranceType": "required",
@@ -46,7 +43,6 @@ creditPolicies: &creditPoliciesCode |
           "maxMonth": 42,
           "monthlyFee": 1.5,
           "registerFee": 15,
-          "fund": "fund_63af1f59e67f85c6f17caabb",
         }
       ],
     },
@@ -55,6 +51,7 @@ creditPolicies: &creditPoliciesCode |
 ctxConstants: &ctxConstantsCode |
   $.ctx.offers = []
   $.ctx.constants = {
+    FUND: 'fund_63af1f59e67f85c6f17caabb',
     MONTHLY_RATE: 0.01,
     CONTRACT_FINE_RATE: 0.02,
     OPTIONAL_INSURANCE_FEE: 0.045,
@@ -907,6 +904,20 @@ nodes:
 
         const allowed = isEmployeeCanRequestInstallmentAmount(firstInstallment)
 
+        function getDisbursementDate() {
+          const disburseDate = new Date(disbursementDate)
+          const currentDate = new Date()
+          const disbursingSameDay = 
+            disburseDate.getFullYear() === currentDate.getFullYear() &&
+            disburseDate.getMonth() === currentDate.getMonth() &&
+            disburseDate.getDay() === currentDate.getDay()
+          
+          if (disbursingSameDay) {
+            return `${disbursementDate}T23:59:59.999-03:00`
+          }
+          return disbursementDate
+        }
+
         $.ctx.offers.push({
           disbursementAmount,
           installmentAmount: allowed ? firstInstallment.total_amount : 0,
@@ -924,12 +935,12 @@ nodes:
           insurance: createInsurance(),
           interestType: qitechInstallment.interest_type,
           creditOperationType: 'ccb',
-          expectedDisbursementDate: disbursementDate,
+          expectedDisbursementDate: getDisbursementDate(),
           interestGracePeriod: qitechInstallment.interest_grace_period,
           principalGracePeriod: qitechInstallment.principal_grace_period,
           numberOfInstallments: qitechInstallment.installments.length,
           firstDueDate: firstInstallment.due_date,
-          fund: $.nodes.request[0].output.body.metadata?.fund || policyRule.fund,
+          fund: $.ctx.constants.FUND,
           rebates: createRebates(),
           fine: {
             fineRate: $.ctx.constants.CONTRACT_FINE_RATE,
