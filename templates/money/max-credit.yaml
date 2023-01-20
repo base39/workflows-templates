@@ -498,7 +498,7 @@ nodes:
           maxNumberOfInstallments: maxNumberOfInstallments || 0,
           minNumberOfInstallments: minNumberOfInstallments || 0,
           maxInstallmentValue: maxInstallment || 0,
-          minInstallmentValue: minInstallmentValue || 0
+          minInstallmentValue: minInstallmentValue || 0,
           customer: $.nodes['find-customer'][0].output.responseData.data[0].id,
           employment: $.flow.loop.item.id,
           available,
