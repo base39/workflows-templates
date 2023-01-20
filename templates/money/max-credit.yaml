@@ -13,8 +13,20 @@ nodes:
               type: string
             product:
               type: string
+              pattern: ^prod_\w+$
             metadata:
               type: object
+              properties:
+                bypassLoan:
+                  type: string
+                  pattern: ^loan_\w+$
+                limitPerInstallmentReduction:
+                  type: number
+                  minimum: 0
+                  maximum: 9007199254740991
+                firstDueDate:
+                  type: string
+                  format: date
           required:
             - document
             - product
@@ -23,7 +35,12 @@ nodes:
     type: function
     parameters:
       code: |-
-        $.ctx.installments = []
+        $.ctx.eligibility = []
+        $.ctx.IOF = 0.0038
+        $.ctx.CONSIGNABLE_MARGIN = 0.35
+        $.ctx.OPTIONAL_INSURANCE_FEE = 0.045
+        $.ctx.REGISTER_FEE = 100
+        $.ctx.LOANS_STATUS = ['open', 'pending', 'disbursed', 'disbursing']
         $.ctx.HTTP_REQUEST_TIMEOUT = 5000
         const base39 = {
           baseUrl: $.secrets.base39BaseUrl
@@ -52,6 +69,28 @@ nodes:
           expressions:
             - leftValue: '{{ $.nodes."find-customer"[0].output.responseData.data }}'
               operation: empty
+      default: find-customer-age-group
+  find-customer-age-group:
+    type: function
+    parameters:
+      code: |
+        const { startOfDay, differenceInYears } = require('date-fns')
+        const birthDate = startOfDay(new Date($.nodes['find-customer'][0].output.responseData.data[0].birthDate))
+
+        return differenceInYears(startOfDay(new Date()), birthDate)
+      next: check-customer-age-group
+  check-customer-age-group:
+    type: conditional
+    parameters:
+      conditions:
+        - next: response-error
+          expressions:
+            - leftValue: '{{ $.nodes."find-customer-age-group"[0].output }}'
+              operation: less
+              rightValue: 18
+            - leftValue: '{{ $.nodes."find-customer-age-group"[0].output }}'
+              operation: greater
+              rightValue: 65
       default: find-employments
   find-employments:
     type: http-request
@@ -72,7 +111,22 @@ nodes:
           expressions:
             - leftValue: '{{ $.nodes."find-employments"[0].output.responseData.data }}'
               operation: empty
-      default: find-product
+      default: find-companies
+  find-companies:
+    type: loop
+    parameters:
+      items: '{{ $.nodes."find-employments"[0].output.responseData.data[*].company }}'
+      starterNode: find-company
+      concurrency: 10
+      next: find-product
+  find-company:
+    type: http-request
+    parameters:
+      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
+      method: GET
+      headers: *base39ApiHeader
+      url: "{{ $.ctx.base39.baseUrl }}/companies/{{ $.flow.loop.item }}"
+      ignoreResponseCode: true
   find-product:
     type: http-request
     parameters:
@@ -100,223 +154,271 @@ nodes:
               operation: not-present
             - leftValue: '{{ $.nodes."find-product"[0].output.responseData.metadata.maxNumberOfInstallments }}'
               operation: not-present
-      default: find-loans-by-product
-  find-loans-by-product:
+      default: find-loans-loop
+  find-loans-loop:
+    type: loop
+    parameters:
+      items: "{{ $.ctx.LOANS_STATUS }}"
+      starterNode: find-loans
+      concurrency: 10
+      next: filter-loans
+  find-loans:
     type: http-request
     parameters:
       timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
       method: GET
       headers: *base39ApiHeader
       queryParameters:
-        customer: '{{ $.nodes."find-customer".output.responseData.data[0].id }}'
-        product: '{{ $.nodes.webhook[0].output.body.product }}"'
+        customer: '{{ $.nodes."find-customer"[0].output.responseData.data[0].id }}'
+        status: "{{ $.flow.loop.item }}"
         limit: 100
-        starting_after: '{{ $.nodes."find-open-loans"[-1].output.responseData.data[-1].id }}'
+        starting_after: '{{ $.flow.nodes."find-loans"[-1].output.responseData.data[-1].id }}'
       url: "{{ $.ctx.base39.baseUrl }}/loans"
-      next: find-loans-by-product-check-pagination
-  find-loans-by-product-check-pagination:
+      next: find-loans-check-pagination
+  find-loans-check-pagination:
     type: conditional
     parameters:
       conditions:
-        - next: find-loans-by-product
+        - next: find-loans
           expressions:
-            - leftValue: '{{ $.nodes."find-open-loans"[-1].output.responseData.hasMore }}'
+            - leftValue: '{{ $.flow.nodes."find-loans"[-1].output.responseData.hasMore }}'
               operation: equal
               rightValue: true
-      default: has-loan-with-product-in-progress
-  has-loan-with-product-in-progress:
+  filter-loans:
     type: function
     parameters:
       code: |
-        const findLoansExecutions = $.nodes['find-loans-by-product']
+        const bypassLoan = $.nodes.webhook[0].output.body.metadata?.bypassLoan
+        const findLoansExecutions = $.nodes["find-loans"]
 
-        const inProgresStatus = ['open', 'disbursing', 'pending']
+        const loans = []
 
-        function hasProduct(acc, loan) {
-          if (inProgresStatus.includes(loan.status)) {
-            acc.push(loan.employment)
+        findLoansExecutions.forEach(execution => {
+          loans.push(...execution.output.responseData.data)
+        })
+
+        if (bypassLoan) {
+          const item = loans.find(loan => loan.id === bypassLoan)
+          const index = loans.indexOf(item);
+          if (index > -1) {
+            loans.splice(index, 1);
           }
-          return acc
         }
 
-        function reduceExecutions(acc, execution) {
-          acc.push(execution.output.responseData.data.reduce(hasProduct, []))
-          return acc.flat()
+        function filterByStatus(loans, status) {
+          return loans.filter(loan => loan.status === status)
         }
 
-        const employmentsWithProduct = findLoansExecutions.reduce(reduceExecutions, [])
+        function filterByproductId(loans, id) {
+          return loans.filter(loan => loan.offer.product === id)
+        }
 
         return {
-          hasLoanWithProduct: !!employmentsWithProduct.length,
-          employmentList: employmentsWithProduct
-        }
-      next: find-open-loans
-  find-open-loans:
-    type: http-request
-    parameters:
-      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
-      method: GET
-      headers: *base39ApiHeader
-      queryParameters:
-        customer: '{{ $.nodes."find-customer"[0].output.responseData.data[0].id }}'
-        status: open
-        limit: 100
-        starting_after: '{{ $.nodes."find-open-loans"[-1].output.responseData.data[-1].id }}'
-      url: "{{ $.ctx.base39.baseUrl }}/loans"
-      next: find-open-loans-check-pagination
-  find-open-loans-check-pagination:
-    type: conditional
-    parameters:
-      conditions:
-        - next: find-open-loans
-          expressions:
-            - leftValue: '{{ $.nodes."find-open-loans"[-1].output.responseData.hasMore }}'
-              operation: equal
-              rightValue: true
-      default: find-disbursed-loans
-  find-disbursed-loans:
-    type: http-request
-    parameters:
-      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
-      method: GET
-      headers: *base39ApiHeader
-      queryParameters:
-        customer: '{{ $.nodes."find-customer"[0].output.responseData.data[0].id }}'
-        status: disbursed
-        limit: 100
-        starting_after: '{{ $.nodes."find-disbursed-loans"[-1].output.responseData.data[-1].id }}'
-      url: "{{ $.ctx.base39.baseUrl }}/loans"
-      next: find-disbursed-loans-check-pagination
-  find-disbursed-loans-check-pagination:
-    type: conditional
-    parameters:
-      conditions:
-        - next: find-disbursed-loans
-          expressions:
-            - leftValue: '{{ $.nodes."find-open-loans"[-1].output.responseData.hasMore }}'
-              operation: equal
-              rightValue: true
-      default: merge-loans
-  merge-loans:
-    type: function
-    parameters:
-      code: |
-        const findDisbursedLoans = $.nodes["find-disbursed-loans"]
-        const findOpenLoans = $.nodes["find-open-loans"]
-        const openedLoans = []
-        const disbursedLoans = []
-        findDisbursedLoans.forEach(execution => {
-          disbursedLoans.push(...execution.output.responseData.data)
-        })
-        findOpenLoans.forEach(execution => {
-          openedLoans.push(...execution.output.responseData.data)
-        })
-        return {
-          loansIds: [
-            ...openedLoans.map(loan => loan.id),
-            ...disbursedLoans.map(loan => loan.id),
-          ],
-          openedLoans,
-          disbursedLoans
-        }
-      next: sum-loans
-  sum-loans:
-    type: function
-    parameters:
-      code: |
-        const disbursedLoans = $.nodes["merge-loans"][0].output.disbursedLoans
-        const openedLoans = $.nodes["merge-loans"][0].output.openedLoans
-        const findInstallmentExecutions = $.nodes["find-installments"]
-        const loans = [
-          ...disbursedLoans,
-          ...openedLoans
-        ]
-
-        function isInstallmentUnpaid(installment){
-          return installment.status === 'unpaid'
-        }
-
-        function sumInstallmentValue(acc, loan) {
-          const firstInstallment = loan.installments.data[0]
-          return acc + (!!firstInstallment && isInstallmentUnpaid(firstInstallment) ? firstInstallment.totalAmount : 0)
-        }
-
-        function sumUnpaindInstallments(acc, installment) {
-          console.log(installment.totalAmount)
-          return acc + (isInstallmentUnpaid(installment) ? installment.totalAmount : 0)
-        }
-
-        function sumInstallmentsTotalAmount(acc, loan) {
-          return acc + loan.installments.data.reduce(sumUnpaindInstallments, 0)
-        }
-        const totalAmount = loans ? loans.reduce(sumInstallmentsTotalAmount, 0) : 0
-        const totalInstallmentPerMonth = loans ? loans.reduce(sumInstallmentValue, 0) : 0
-        const totalDisbursedLoans = disbursedLoans ? disbursedLoans.length : 0
-        return {
-          totalInstallmentPerMonth,
-          totalAmount,
-          totalDisbursedLoans
+          openedLoans: filterByStatus(loans, 'open'),
+          pendingLoans: filterByStatus(loans, 'pending'),
+          disbursedLoans: filterByStatus(loans, 'disbursed'),
+          disbursingLoans: filterByStatus(loans, 'disbursing'),
+          voidLoans: filterByStatus(loans, 'void'),
+          loansWithProduct: filterByproductId(loans, $.nodes.webhook[0].output.body.product)
         }
       next: calculate-loop
   calculate-loop:
     type: loop
     parameters:
       items: '{{ $.nodes."find-employments"[0].output.responseData.data[*] }}'
-      starterNode: calculate-max-installment
+      starterNode: calculate-dates
       concurrency: 10
       next: webhook-response
+  calculate-dates:
+    type: function
+    parameters:
+      code: |
+        const { startOfDay, differenceInMonths, addMinutes, differenceInDays, startOfMonth} = require('date-fns')
+        const predefinedFirstDueDate = $.nodes.webhook[0].output.metadata?.firstDueDate
+
+        $.ctx.employmentCompany = $.nodes['find-company'].find(execution => execution.output.responseData.id === $.flow.loop.item.company )?.output.responseData
+        const contractPaymentDay = $.ctx.employmentCompany?.metadata?.contractPaymentDay || 10
+
+        function createDate(stringDate) {
+          return startOfDay(stringDate ? new Date(stringDate) : new Date())
+        }
+
+        function calculateCompanyFirstDueDate() {
+          const currentDate = createDate()
+          return new Date(currentDate.getFullYear(), currentDate.getMonth() + 2, contractPaymentDay)
+        }
+
+        return {
+          firstDueDate: predefinedFirstDueDate || calculateCompanyFirstDueDate()
+        }
+      next: sum-loans
+  sum-loans:
+    type: function
+    parameters:
+      code: |
+        const disbursedLoans = $.nodes["filter-loans"][0].output.disbursedLoans.filter(loan => loan.employment === $.flow.loop.item.id)
+        const disbursingLoans = $.nodes["filter-loans"][0].output.disbursingLoans.filter(loan => loan.employment === $.flow.loop.item.id)
+        const openedLoans = $.nodes["filter-loans"][0].output.openedLoans.filter(loan => loan.employment === $.flow.loop.item.id)
+        const pendingLoans = $.nodes["filter-loans"][0].output.pendingLoans.filter(loan => loan.employment === $.flow.loop.item.id)
+
+        const inProgressStatus = ['open', 'disbursing', 'pending']
+        const loansWithProductInProgress = $.nodes["filter-loans"][0].output.loansWithProduct.filter(loan => loan.employment === $.flow.loop.item.id && inProgressStatus.includes(loan.status))
+
+        function isInstallmentUnpaid(installment){
+          return installment.status === 'unpaid'
+        }
+
+        function sumInstallmentValue(acc, loan) {
+          const unpaidInstallment = loan.installments.data.find(installment => installment.status === 'unpaid')
+          return acc + (unpaidInstallment?.totalAmount || 0)
+        }
+
+        function sumUnpaindInstallments(acc, installment) {
+          return acc + (isInstallmentUnpaid(installment) ? installment.principalAmortizationAmount : 0)
+        }
+
+        function sumInstallmentsTotalAmount(acc, loan) {
+          return acc + loan.installments.data.reduce(sumUnpaindInstallments, 0)
+        }
+        const totalAmount = [
+          ...disbursedLoans,
+          ...openedLoans,
+        ].reduce(sumInstallmentsTotalAmount, 0)
+
+        const totalInstallmentPerMonth = [
+          ...disbursedLoans,
+          ...openedLoans,
+        ].reduce(sumInstallmentValue, 0)
+
+        const totalDisbursedLoans = $.nodes["filter-loans"][0].output.disbursedLoans.length
+
+        return {
+          totalInstallmentPerMonth,
+          totalAmount,
+          totalDisbursedLoans,
+          loansWithProductInProgress
+        }
+      next: verify-employment
+  verify-employment:
+    type: function
+    parameters:
+      code: |
+        const { loansWithProductInProgress } = $.flow.nodes["sum-loans"][0].output
+        const customerAge = $.nodes['find-customer-age-group'][0].output
+
+        const hasProductInProgress = loansWithProductInProgress.length
+        const isEmploymentNotWorking = $.flow.loop.item.status !== 'working'
+        const companyIsInactive = $.ctx.employmentCompany.status === 'inactive'
+        const customerIsNotInAgeGroup = customerAge < 18 || customerAge > 65
+
+        const isEmploymentUnavailable = hasProductInProgress ||
+          isEmploymentNotWorking ||
+          companyIsInactive ||
+          customerIsNotInAgeGroup
+
+        return {
+          hasProductInProgress,
+          isEmploymentNotWorking,
+          companyIsInactive,
+          customerIsNotInAgeGroup,
+          isEmploymentUnavailable
+        }
+      next: calculate-max-installment
   calculate-max-installment:
     type: function
     parameters:
       code: |
-        const { hasLoanWithProduct, employmentList }= $.nodes['has-loan-with-product-in-progress'][0].output
-        if( hasLoanWithProduct && employmentList.includes($.flow.loop.item.id) ) {
+        const { isEmploymentUnavailable } = $.flow.nodes["verify-employment"][0].output
+        const limitPerInstallment = $.flow.loop.item?.limitPerInstallment
+
+        if( isEmploymentUnavailable ) {
           return 0
         }
 
-        const maxInstallmentReduction = $.nodes["sum-loans"][0].output.totalInstallmentPerMonth
-        const netSalary = $.flow.loop.item.netSalary || 0
-        const limitPerInstallment = $.flow.loop.item?.limitPerInstallment || false
-        const { metadata } = $.nodes['find-product'][0].output.responseData
-        let margin = metadata && metadata.consignableMargin ? metadata.consignableMargin : 0.35
-        const estimatedMaxInstallment = netSalary * margin
-        const maxInstallment = Math.max(estimatedMaxInstallment - maxInstallmentReduction, 0)
-        if(limitPerInstallment){
-          return Math.min(maxInstallment, limitPerInstallment)
+        function getConsignableMargin() {
+          const limitPerInstallment = $.flow.loop.item?.limitPerInstallment
+          return limitPerInstallment || calculateConsignableMargin()
         }
-        return maxInstallment
+
+        function calculateConsignableMargin() {
+          const marginPercent = $.nodes['find-product'][0].output.responseData?.metadata?.consignableMargin || $.ctx.CONSIGNABLE_MARGIN
+          const payableMarginValue = $.nodes.webhook[0].output.metadata?.limitPerInstallmentReduction
+          const netSalary = $.flow.loop.item.netSalary || 0
+
+          return (netSalary * marginPercent) - payableMarginValue
+        }
+
+        const estimatedMaxInstallment = getConsignableMargin()
+        const maxInstallmentReduction = $.nodes["sum-loans"][0].output.totalInstallmentPerMonth
+
+        return Math.max(estimatedMaxInstallment - maxInstallmentReduction, 0)
       next: calculate-max-credit
   calculate-max-credit:
     type: function
     parameters:
       code: |
-        const { hasLoanWithProduct, employmentList }= $.nodes['has-loan-with-product-in-progress'][0].output
-        if( hasLoanWithProduct && employmentList.includes($.flow.loop.item.id) ) {
+        const { differenceInDays, startOfDay, addMonths } = require('date-fns')
+        const BigNumber = require('bignumber.js')
+
+        const { iof, monthlyFee, maxNumberOfInstallments } = $.nodes['find-product'][0].output.responseData.metadata
+
+        const { isEmploymentUnavailable } = $.flow.nodes["verify-employment"][0].output
+
+        if( isEmploymentUnavailable ) {
           return 0
         }
 
-        const { differenceInDays, startOfDay, addMonths } = require('date-fns')
-        const BigNumber = require('bignumber.js')
-        const { iof, monthlyFee, maxNumberOfInstallments } = $.nodes['find-product'][0].output.responseData.metadata
-        const grossSalary = $.flow.loop.item.grossSalary || 0
         const limitPerLoan = $.flow.loop.item?.limitPerLoan || false
-        const maxCreditReduction = $.nodes["sum-loans"][0].output.totalAmount + grossSalary * iof
-        const maxInstallmentValue = $.flow.nodes["calculate-max-installment"][0].output
-        const firstDueDate = new Date()
-        let sum = 0
-        for (let i = 0; i < maxNumberOfInstallments; i++) {
-          const datam = addMonths(startOfDay(new Date(firstDueDate)), i)
-          const diffDays = differenceInDays(datam, startOfDay(new Date()))
-          const monthlyFeeMultiplier = (monthlyFee / 100) + 1
-          const diffInMonths = new BigNumber(diffDays).dividedBy(30)
-          const compondFee = Math.pow(monthlyFeeMultiplier, diffInMonths.toNumber())
-          sum += Math.pow(compondFee, -1)
+
+        function calculateEstimatedMaxCredit() {
+          const { firstDueDate } = $.flow.nodes["calculate-dates"][0].output
+          const { monthlyFee, maxNumberOfInstallments } = $.nodes['find-product'][0].output.responseData.metadata
+          const maxInstallmentValue = $.flow.nodes["calculate-max-installment"][0].output
+
+          let installmentsWithoutFee = 0
+          for (let installment = 1; installment <= maxNumberOfInstallments; installment++) {
+            const datam = addMonths(startOfDay(new Date(firstDueDate)), installment)
+            const diffDays = differenceInDays(datam, startOfDay(new Date()))
+            const monthlyFeeMultiplier = (monthlyFee / 100) + 1
+            const diffInMonths = new BigNumber(diffDays).dividedBy(30)
+            const compondFee = Math.pow(monthlyFeeMultiplier, diffInMonths.toNumber())
+            installmentsWithoutFee += Math.pow(compondFee, -1)
+          }
+
+          return installmentsWithoutFee * maxInstallmentValue
         }
-        const estimatedMaxCredit = sum * maxInstallmentValue
-        const maxCredit = Math.max(estimatedMaxCredit - maxCreditReduction, 0)
-        if(limitPerLoan){
+
+        function calculateInsurance(creditValue) {
+          const insuranceType = 'REQUIRED'
+
+          if (insuranceType === 'REQUIRED' || insuranceType === 'UNINSURED') {
+            return 0
+          }
+
+          return new BigNumber(creditValue)
+            .times($.ctx.OPTIONAL_INSURANCE_FEE)
+            .decimalPlaces(2)
+            .toNumber()
+        }
+
+        function getRegisterFee() {
+          const { totalDisbursedLoans } = $.flow.nodes["sum-loans"][0].output
+          const registerFee = $.ctx.REGISTER_FEE
+          if(totalDisbursedLoans > 0) {
+            return 0
+          }
+
+          return registerFee
+        }
+
+        const estimatedMaxCredit = calculateEstimatedMaxCredit()
+
+        const maxCredit = Math.max(estimatedMaxCredit - calculateInsurance(estimatedMaxCredit) - getRegisterFee(), 0)
+
+        if (limitPerLoan) {
           return Math.min(maxCredit, limitPerLoan)
         }
+
         return maxCredit
       next: round-values
   round-values:
@@ -334,7 +436,7 @@ nodes:
         return {
           maxInstallment: roundByPlaceValue(maxInstallment),
           maxCredit: roundByPlaceValue(maxCredit),
-          minInstallmentValue: roundByPlaceValue(maxCredit / maxNumberOfInstallments),
+          minInstallmentValue: 0,
         }
       next: verify-availability
   verify-availability:
@@ -342,34 +444,42 @@ nodes:
     parameters:
       code: |
         const { maxCredit, maxInstallment, minInstallmentValue } = $.flow.nodes['round-values'][0].output
-        const { minLoanAmount } = $.nodes['find-product'][0].output.responseData.metadata
-        const { hasLoanWithProduct, employmentList }= $.nodes['has-loan-with-product-in-progress'][0].output
+        const minLoanAmount = $.nodes['find-product'][0].output.responseData.metadata.minLoanAmount
 
-        if (hasLoanWithProduct && employmentList.includes($.flow.loop.item.id)) {
+        const { hasProductInProgress, isEmploymentNotWorking, companyIsInactive, customerIsNotInAgeGroup } = $.flow.nodes["verify-employment"][0].output
+
+        function availability(reason) {
           return {
-            available: false,
-            reason: 'Customer has a loan in progress.'
+            available: !reason,
+            reason
           }
+        }
+
+        if (hasProductInProgress) {
+          return availability('Customer has a loan in progress.')
+        }
+
+        if (isEmploymentNotWorking) {
+          return availability('Employee not working.')
+        }
+
+        if (companyIsInactive) {
+          return availability('Company is not active.')
+        }
+
+        if (customerIsNotInAgeGroup) {
+          return availability('Customer is under 18 or over 65.')
         }
 
         if (maxCredit < minLoanAmount) {
-          return {
-            available: false,
-            reason: 'Calculated max credit is less than the minimum allowed.'
-          }
+          return availability('Calculated max credit is less than the minimum allowed.')
         }
 
         if (maxInstallment < minInstallmentValue) {
-          return {
-            available: false,
-            reason: 'Calculated max installment is less than the minimum allowed.'
-          }
+          return availability('Calculated max installment is less than the minimum allowed.')
         }
 
-        return {
-          available: true,
-          reason: null
-        }
+        return availability()
       next: bind-response
   bind-response:
     type: function
@@ -377,30 +487,32 @@ nodes:
       code: |
         const { maxCredit, maxInstallment, minInstallmentValue } = $.flow.nodes['round-values'][0].output
         const { maxNumberOfInstallments, minNumberOfInstallments, minLoanAmount } = $.nodes['find-product'][0].output.responseData.metadata
+        const termsAndConditions = $.nodes['find-product'][0].output.responseData?.termsAndConditions
         const { available, reason } = $.flow.nodes['verify-availability'][0].output
-        return {
-          slug: $.nodes['find-product'][0].output.responseData.slug,
-          name: $.nodes['find-product'][0].output.responseData.name,
-          description:$.nodes['find-product'][0].output.responseData.description,
-          maxLoanAmount: maxCredit,
-          minLoanAmount,
-          maxNumberOfInstallments,
-          minNumberOfInstallments,
-          maxInstallmentValue: maxInstallment,
-          minInstallmentValue,
+        $.ctx.eligibility.push({
+          slug: $.nodes['find-product'][0].output.responseData.slug || '',
+          name: $.nodes['find-product'][0].output.responseData.name || '',
+          description:$.nodes['find-product'][0].output.responseData.description || '',
+          maxLoanAmount: maxCredit || 0,
+          minLoanAmount: minLoanAmount || 0,
+          maxNumberOfInstallments: maxNumberOfInstallments || 0,
+          minNumberOfInstallments: minNumberOfInstallments || 0,
+          maxInstallmentValue: maxInstallment || 0,
+          minInstallmentValue: minInstallmentValue || 0
           customer: $.nodes['find-customer'][0].output.responseData.data[0].id,
           employment: $.flow.loop.item.id,
           available,
           metadata: {
             ...(reason ? { reason } : {})
-          }
-        }
+          },
+          termsAndConditions: termsAndConditions || '',
+        })
   webhook-response:
     type: webhook-response
     parameters:
       statusCode: 200
       body:
-        data: '{{ $.nodes."bind-response"[*].output }}'
+        data: "{{ $.ctx.eligibility }}"
   response-error:
     type: webhook-response
     parameters:
