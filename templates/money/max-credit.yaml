@@ -41,12 +41,24 @@ nodes:
         $.ctx.OPTIONAL_INSURANCE_FEE = 0.045
         $.ctx.REGISTER_FEE = 100
         $.ctx.LOANS_STATUS = ['open', 'pending', 'disbursed', 'disbursing']
+        $.ctx.LOANS_STATUS_LENGTH = $.ctx.LOANS_STATUS.length
         $.ctx.HTTP_REQUEST_TIMEOUT = 5000
         const base39 = {
           baseUrl: $.secrets.base39BaseUrl
         }
         $.ctx.base39 =  base39
-      next: find-customer
+      next: parallel-data-requests
+  parallel-data-requests:
+    type: parallel
+    parameters:
+      starterNodes:
+        - find-customer
+        - find-employments
+        - find-product
+      concurrency: 3
+      next: check-data
+
+  # =-=-=-=: Subfluxo 'find-customer' :=-=-=-=
   find-customer:
     type: http-request
     parameters:
@@ -65,11 +77,10 @@ nodes:
     type: conditional
     parameters:
       conditions:
-        - next: response-error
+        - next: find-customer-age-group
           expressions:
             - leftValue: '{{ $.nodes."find-customer"[0].output.responseData.data }}'
-              operation: empty
-      default: find-customer-age-group
+              operation: not-empty
   find-customer-age-group:
     type: function
     parameters:
@@ -78,89 +89,13 @@ nodes:
         const birthDate = startOfDay(new Date($.nodes['find-customer'][0].output.responseData.data[0].birthDate))
 
         return differenceInYears(startOfDay(new Date()), birthDate)
-      next: check-customer-age-group
-  check-customer-age-group:
-    type: conditional
-    parameters:
-      conditions:
-        - next: response-error
-          expressions:
-            - leftValue: '{{ $.nodes."find-customer-age-group"[0].output }}'
-              operation: less
-              rightValue: 18
-            - leftValue: '{{ $.nodes."find-customer-age-group"[0].output }}'
-              operation: greater
-              rightValue: 65
-      default: find-employments
-  find-employments:
-    type: http-request
-    parameters:
-      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
-      method: GET
-      headers: *base39ApiHeader
-      url: "{{ $.ctx.base39.baseUrl }}/employments"
-      queryParameters:
-        document: "{{ $.nodes.webhook[0].output.body.document }}"
-      ignoreResponseCode: true
-      next: check-employments
-  check-employments:
-    type: conditional
-    parameters:
-      conditions:
-        - next: response-error
-          expressions:
-            - leftValue: '{{ $.nodes."find-employments"[0].output.responseData.data }}'
-              operation: empty
-      default: find-companies
-  find-companies:
-    type: loop
-    parameters:
-      items: '{{ $.nodes."find-employments"[0].output.responseData.data[*].company }}'
-      starterNode: find-company
-      concurrency: 10
-      next: find-product
-  find-company:
-    type: http-request
-    parameters:
-      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
-      method: GET
-      headers: *base39ApiHeader
-      url: "{{ $.ctx.base39.baseUrl }}/companies/{{ $.flow.loop.item }}"
-      ignoreResponseCode: true
-  find-product:
-    type: http-request
-    parameters:
-      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
-      method: GET
-      headers: *base39ApiHeader
-      url: "{{ $.ctx.base39.baseUrl }}/products/{{ $.nodes.webhook[0].output.body.product }}"
-      ignoreResponseCode: true
-      next: check-product
-  check-product:
-    type: conditional
-    parameters:
-      conditions:
-        - next: response-error
-          expressions:
-            - leftValue: '{{ $.nodes."find-product"[0].output.status }}'
-              operation: not-equal
-              rightValue: 200
-        - next: response-error-metadata
-          operator: or
-          expressions:
-            - leftValue: '{{ $.nodes."find-product"[0].output.responseData.metadata.iof }}'
-              operation: not-present
-            - leftValue: '{{ $.nodes."find-product"[0].output.responseData.metadata.monthlyFee }}'
-              operation: not-present
-            - leftValue: '{{ $.nodes."find-product"[0].output.responseData.metadata.maxNumberOfInstallments }}'
-              operation: not-present
-      default: find-loans-loop
+      next: find-loans-loop
   find-loans-loop:
     type: loop
     parameters:
       items: "{{ $.ctx.LOANS_STATUS }}"
       starterNode: find-loans
-      concurrency: 10
+      concurrency: "{{ $.ctx.LOANS_STATUS_LENGTH }}"
       next: filter-loans
   find-loans:
     type: http-request
@@ -173,6 +108,7 @@ nodes:
         status: "{{ $.flow.loop.item }}"
         limit: 100
         starting_after: '{{ $.flow.nodes."find-loans"[-1].output.responseData.data[-1].id }}'
+        expand: data.installments:100
       url: "{{ $.ctx.base39.baseUrl }}/loans"
       next: find-loans-check-pagination
   find-loans-check-pagination:
@@ -221,7 +157,90 @@ nodes:
           voidLoans: filterByStatus(loans, 'void'),
           loansWithProduct: filterByproductId(loans, $.nodes.webhook[0].output.body.product)
         }
-      next: calculate-loop
+  # =-=-=-=: Fim do subfluxo 'find-customer' :=-=-=-=
+  # =-=-=-=: Subfluxo 'find-employments' :=-=-=-=
+  find-employments:
+    type: http-request
+    parameters:
+      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
+      method: GET
+      headers: *base39ApiHeader
+      url: "{{ $.ctx.base39.baseUrl }}/employments"
+      queryParameters:
+        document: "{{ $.nodes.webhook[0].output.body.document }}"
+      ignoreResponseCode: true
+      next: check-employments
+  check-employments:
+    type: conditional
+    parameters:
+      conditions:
+        - next: find-companies
+          expressions:
+            - leftValue: '{{ $.nodes."find-employments"[0].output.responseData.data }}'
+              operation: not-empty
+  find-companies:
+    type: loop
+    parameters:
+      items: '{{ $.nodes."find-employments"[0].output.responseData.data[*].company }}'
+      starterNode: find-company
+      concurrency: 10
+  find-company:
+    type: http-request
+    parameters:
+      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
+      method: GET
+      headers: *base39ApiHeader
+      url: "{{ $.ctx.base39.baseUrl }}/companies/{{ $.flow.loop.item }}"
+      ignoreResponseCode: true
+  # =-=-=-=: Fim do subfluxo 'find-employments' :=-=-=-=
+
+  # =-=-=-=: Subfluxo 'find-product' :=-=-=-=
+  find-product:
+    type: http-request
+    parameters:
+      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
+      method: GET
+      headers: *base39ApiHeader
+      url: "{{ $.ctx.base39.baseUrl }}/products/{{ $.nodes.webhook[0].output.body.product }}"
+      ignoreResponseCode: true
+  # =-=-=-=: Fim do subfluxo 'find-product' :=-=-=-=
+
+  check-data:
+    type: conditional
+    parameters:
+      conditions:
+        - next: response-error
+          expressions:
+            - leftValue: '{{ $.nodes."find-product"[0].output.status }}'
+              operation: not-equal
+              rightValue: 200
+        - next: response-error
+          expressions:
+            - leftValue: '{{ $.nodes."find-customer"[0].output.responseData.data }}'
+              operation: empty
+        - next: response-error
+          operator: or
+          expressions:
+            - leftValue: '{{ $.nodes."find-customer-age-group"[0].output }}'
+              operation: less
+              rightValue: 18
+            - leftValue: '{{ $.nodes."find-customer-age-group"[0].output }}'
+              operation: greater
+              rightValue: 65
+        - next: response-error
+          expressions:
+            - leftValue: '{{ $.nodes."find-employments"[0].output.responseData.data }}'
+              operation: empty
+        - next: response-error-metadata
+          operator: or
+          expressions:
+            - leftValue: '{{ $.nodes."find-product"[0].output.responseData.metadata.iof }}'
+              operation: not-present
+            - leftValue: '{{ $.nodes."find-product"[0].output.responseData.metadata.monthlyFee }}'
+              operation: not-present
+            - leftValue: '{{ $.nodes."find-product"[0].output.responseData.metadata.maxNumberOfInstallments }}'
+              operation: not-present
+      default: calculate-loop
   calculate-loop:
     type: loop
     parameters:
@@ -236,8 +255,8 @@ nodes:
         const { startOfDay, differenceInMonths, addMinutes, differenceInDays, startOfMonth} = require('date-fns')
         const predefinedFirstDueDate = $.nodes.webhook[0].output.metadata?.firstDueDate
 
-        $.ctx.employmentCompany = $.nodes['find-company'].find(execution => execution.output.responseData.id === $.flow.loop.item.company )?.output.responseData
-        const contractPaymentDay = $.ctx.employmentCompany?.metadata?.contractPaymentDay || 10
+        const employmentCompany = $.nodes['find-company'].find(execution => execution.output.responseData.id === $.flow.loop.item.company ).output.responseData
+        const contractPaymentDay = employmentCompany.metadata?.contractPaymentDay || 10
 
         function createDate(stringDate) {
           return startOfDay(stringDate ? new Date(stringDate) : new Date())
@@ -249,6 +268,7 @@ nodes:
         }
 
         return {
+          employmentCompany,
           firstDueDate: predefinedFirstDueDate || calculateCompanyFirstDueDate()
         }
       next: sum-loans
@@ -269,6 +289,9 @@ nodes:
         }
 
         function sumInstallmentValue(acc, loan) {
+          if (!loan.installments) {
+            return acc
+          }
           const unpaidInstallment = loan.installments.data.find(installment => installment.status === 'unpaid')
           return acc + (unpaidInstallment?.totalAmount || 0)
         }
@@ -278,6 +301,9 @@ nodes:
         }
 
         function sumInstallmentsTotalAmount(acc, loan) {
+          if (!loan.installments) {
+            return acc
+          }
           return acc + loan.installments.data.reduce(sumUnpaindInstallments, 0)
         }
         const totalAmount = [
@@ -305,10 +331,11 @@ nodes:
       code: |
         const { loansWithProductInProgress } = $.flow.nodes["sum-loans"][0].output
         const customerAge = $.nodes['find-customer-age-group'][0].output
+        const { employmentCompany } = $.flow.nodes["calculate-dates"][0].output
 
         const hasProductInProgress = loansWithProductInProgress.length
         const isEmploymentNotWorking = $.flow.loop.item.status !== 'working'
-        const companyIsInactive = $.ctx.employmentCompany.status === 'inactive'
+        const companyIsInactive = employmentCompany.status === 'inactive'
         const customerIsNotInAgeGroup = customerAge < 18 || customerAge > 65
 
         const isEmploymentUnavailable = hasProductInProgress ||
