@@ -1,0 +1,124 @@
+base39ApiHeaders: &base39ApiHeaders
+  Content-Type: application/json
+  Accept: application/json
+  x-api-key: "{{ $.secrets.base39ApiKey }}"
+
+starterNode: request
+nodes:
+  request:
+    type: webhook
+    parameters:
+      method: POST
+      path: /v1/customer-payment-methods
+      validation:
+        headers:
+          x-api-key:
+            required: true
+      next: check-authorization
+  check-authorization:
+    type: conditional
+    parameters:
+      conditions:
+        - next: response-error-authorization
+          expressions:
+            - leftValue: '{{ $.nodes.request[0].output.headers."x-api-key" }}'
+              operation: not-equal
+              rightValue: "{{ $.secrets.apiKey }}"
+      default: b39-request-list-payment-method
+  b39-request-list-payment-method:
+    type: http-request
+    parameters:
+      method: GET
+      url: "{{ $.secrets.base39BaseUrl }}/payment-methods"
+      headers: *base39ApiHeaders
+      queryParameters:
+        owner: "{{ $.nodes.request[0].output.body.data.id }}"
+        limit: 100
+        starting_after: '{{ $.nodes."b39-request-list-payment-method"[-1].output.responseData.data[-1].id }}'
+      timeout: 5000
+      next: b39-request-list-payment-method-check-pagination
+  b39-request-list-payment-method-check-pagination:
+    type: conditional
+    parameters:
+      conditions:
+        - next: b39-request-list-payment-method
+          expressions:
+            - leftValue: '{{ $.nodes."b39-request-list-payment-method"[-1].output.responseData.hasMore }}'
+              operation: equal
+              rightValue: true
+      default: filter-existing-payment-method
+  filter-existing-payment-method:
+    type: function
+    parameters:
+      code: |
+        const paymentMethodListExecutions = $.nodes['b39-request-list-payment-method']
+
+        const paymentMethodList = []
+
+        paymentMethodListExecutions.forEach(execution => {
+          paymentMethodList.push(...execution.output.responseData.data)
+        })
+
+        function hasSameMethodData(paymentMethod) {
+          const { document: customerDocument, name: customerName } = $.nodes.request[0].output.body.data
+          const { keyType, keyValue, accountHolderName, accountHolderDocument, accountHolderType } = paymentMethod.methodData
+          return keyType === 'document'
+            && accountHolderType === 'individual'
+            && keyValue === customerDocument
+            && accountHolderName === customerName
+            && accountHolderDocument === customerDocument
+        }
+        return paymentMethodList.some(hasSameMethodData)
+      next: check-existing-payment-method
+  check-existing-payment-method:
+    type: conditional
+    parameters:
+      conditions:
+        - next: response
+          expressions:
+            - leftValue: '{{$.nodes."filter-existing-payment-method"[0].output}}'
+              operation: equal
+              rightValue: true
+      default: b39-request-create-payment-method
+  b39-request-create-payment-method:
+    type: http-request
+    parameters:
+      method: POST
+      url: "{{ $.secrets.base39BaseUrl }}/payment-methods"
+      headers: *base39ApiHeaders
+      body:
+        status: not_verified
+        method: pix_key
+        methodData:
+          keyType: document
+          keyValue: "{{ $.nodes.request[0].output.body.data.document }}"
+          accountHolderName: "{{ $.nodes.request[0].output.body.data.name }}"
+          accountHolderDocument: "{{ $.nodes.request[0].output.body.data.document }}"
+          accountHolderType: individual
+      timeout: 10000
+      next: b39-request-payment-method-bind
+  b39-request-payment-method-bind:
+    type: http-request
+    parameters:
+      method: POST
+      url: '{{ $.secrets.base39BaseUrl }}/payment-methods/{{ $.nodes."b39-request-create-payment-method"[0].output.responseData.id }}/link'
+      headers: *base39ApiHeaders
+      body:
+        owner: "{{ $.nodes.request[0].output.body.data.id }}"
+      timeout: 10000
+      next: response
+  response:
+    type: webhook-response
+    parameters:
+      statusCode: 200
+      headers:
+        Content-Type: application/json
+      body: {}
+  response-error-authorization:
+    type: webhook-response
+    parameters:
+      statusCode: 401
+      headers:
+        Content-Type: application/json
+      body:
+        message: Invalid Token

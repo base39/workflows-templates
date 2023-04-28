@@ -56,6 +56,7 @@ ctxConstants: &ctxConstantsCode |
     CONTRACT_FINE_RATE: 0.02,
     OPTIONAL_INSURANCE_FEE: 0.045,
     REQUIRED_INSURANCE_FEE: 0.0179,
+    CONSIGNABLE_MARGIN: 0.35,
     INSURANCE_INSURER: 'usebens',
     HTTP_REQUEST_TIMEOUT: 90000,
     DECIMAL_PLACES: 2,
@@ -324,7 +325,7 @@ nodes:
             numberOfInstallments:
               type: array
               minItems: 1
-              maxItems: 6
+              maxItems: 8
               items:
                 type: number
                 minimum: 6
@@ -339,6 +340,19 @@ nodes:
             product:
               type: string
               pattern: ^prod_\w+$
+            metadata:
+              type: object
+              properties:
+                bypassLoan:
+                  type: string
+                  pattern: ^loan_\w+$
+                limitPerInstallmentReduction:
+                  type: number
+                  minimum: 0
+                  maximum: 9007199254740991
+                firstDueDate:
+                  type: string
+                  format: date
           required:
             - numberOfInstallments
             - disbursementAmount
@@ -354,7 +368,7 @@ nodes:
     type: http-request
     parameters:
       method: GET
-      url: "{{ $.secrets.base39BaseUrl }}/v1/employments/{{ $.nodes.request[0].output.body.employment }}"
+      url: "{{ $.secrets.base39BaseUrl }}/employments/{{ $.nodes.request[0].output.body.employment }}"
       headers: *base39ApiHeaders
       ignoreResponseCode: true
       queryParameters:
@@ -380,6 +394,88 @@ nodes:
     type: function
     parameters:
       code: $.ctx.employment = $.nodes['request-employment-data'][0].output.responseData
+      next: request-loans-loop
+  request-loans-loop:
+    type: loop
+    description: |
+      Inicia a iteração para obter a lista de propostas existentes do cliente. Os status buscados estão descriminados no campo "items" do Node.
+    parameters:
+      items:
+        - open
+        - disbursed
+      starterNode: request-loans
+      concurrency: 2
+      next: sum-max-installment-reduction
+  request-loans:
+    type: http-request
+    description: Busca as propostas em páginas de 100 items por vez.
+    parameters:
+      timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
+      method: GET
+      headers: *base39ApiHeaders
+      queryParameters:
+        customer: "{{ $.nodes.request[0].output.body.customer }}"
+        status: "{{ $.flow.loop.item }}"
+        limit: 100
+        starting_after: '{{ $.flow.nodes."request-loans"[-1].output.responseData.data[-1].id }}'
+        expand: data.installments:100
+      url: "{{ $.secrets.base39BaseUrl }}/loans"
+      next: request-loans-check-pagination
+  request-loans-check-pagination:
+    type: conditional
+    description: Verifica se é a última página de propostas baseado no campo "hasMore" obtido na última requisição (índice -1 na expressão).
+    parameters:
+      conditions:
+        - next: request-loans
+          expressions:
+            - leftValue: '{{ $.flow.nodes."request-loans"[-1].output.responseData.hasMore }}'
+              operation: equal
+              rightValue: true
+  sum-max-installment-reduction:
+    type: function
+    description: |
+      Calcula a redução do limite por parcela / redução da margem do funcionário.
+      1. Agrupa todas as propostas encontradas;
+      2. Filtra apenas as propostas para O MESMO FUNCIONÁRIO;
+      3. Soma o valor total de todas as parcelas não pagas de todas as propostas filtradas;
+      4. Retorna o valor.
+    parameters:
+      code: |
+        const { BigNumber } = require("bignumber.js");
+        BigNumber.set($.ctx.constants.BIG_NUMBER_CONFIG);
+        
+        const requestLoansExecutions = $.nodes["request-loans"]
+        const bypassLoan = $.nodes.request[0].output.body.metadata?.bypassLoan
+
+        const loans = []
+
+        requestLoansExecutions.forEach(execution => {
+          loans.push(...execution.output.responseData.data)
+        })
+
+        if (bypassLoan) {
+          const item = loans.find(loan => loan.id === bypassLoan)
+          const index = loans.indexOf(item);
+          if (index > -1) {
+            loans.splice(index, 1);
+          }
+        }
+
+        const employmentLoans = loans.filter(loan => loan.employment === $.ctx.employment.id)
+
+        function sumInstallmentValue(acc, loan) {
+          if (!loan.installments) {
+            return acc
+          }
+          const unpaidInstallment = loan.installments.data.find(installment => installment.status === 'unpaid')
+          return acc.plus((unpaidInstallment?.totalAmount || 0))
+        }
+
+        const maxInstallmentReduction = employmentLoans.reduce(sumInstallmentValue, new BigNumber(0)).toNumber()
+
+        return {
+         maxInstallmentReduction
+        }
       next: calculate-dates
   calculate-dates:
     type: function
@@ -387,6 +483,7 @@ nodes:
       code: |
         const { startOfDay, differenceInMonths } = require('date-fns')
 
+        const predefinedFirstDueDate = $.nodes.request[0].output.metadata?.firstDueDate
         const { payrollPaymentDay } = $.ctx.employment.company.settings
         const { hiredAt } = $.ctx.employment
 
@@ -441,7 +538,7 @@ nodes:
 
         return {
           workingMonths: calculateEmployeeWorkingMonths(),
-          firstDueDate: formatDate(calculateCompanyFirstDueDate()),
+          firstDueDate: predefinedFirstDueDate || formatDate(calculateCompanyFirstDueDate()),
           disbursementDate: formatDate(calculateNextBusinessDay()),
         }
       next: set-ctx-credit-policy-list
@@ -483,7 +580,7 @@ nodes:
     type: http-request
     parameters:
       method: GET
-      url: "{{ $.secrets.base39BaseUrl }}/v1/tenants/settings/disbursement"
+      url: "{{ $.secrets.base39BaseUrl }}/tenants/settings/disbursement"
       headers: *base39ApiHeaders
       timeout: "{{ $.ctx.constants.HTTP_REQUEST_TIMEOUT }}"
       next: set-ctx-functions
@@ -847,12 +944,28 @@ nodes:
         const { disbursementDate } = $.nodes["calculate-dates"][0].output
         const insurance = $.flow.nodes["simulation-qitech-insurance-calculate-insurance"][0].output
 
+
         const qitechInstallment = $.flow.nodes["simulation-qitech-decrypt-response"][0].output.data
         const firstInstallment = qitechInstallment.installments[0];
 
         function isEmployeeCanRequestInstallmentAmount(installment) {
-          const maxInstallmentValue = new BigNumber($.ctx.employment.limitPerInstallment)
-          return new BigNumber(installment.total_amount).isLessThanOrEqualTo(maxInstallmentValue)
+          const { limitPerInstallment, netSalary } = $.ctx.employment
+          const { maxInstallmentReduction } = $.nodes["sum-max-installment-reduction"][0].output
+
+          let maxInstallmentValue
+          if (limitPerInstallment) {
+            maxInstallmentValue = new BigNumber(limitPerInstallment)
+          } else {
+            const marginPercent = $.nodes['find-product'][0].output.responseData?.metadata?.consignableMargin || $.ctx.constants.CONSIGNABLE_MARGIN
+            const payableMarginValue = $.nodes.request[0].output.metadata?.limitPerInstallmentReduction || 0
+            maxInstallmentValue = new BigNumber(netSalary)
+              .multipliedBy(marginPercent)
+              .minus(payableMarginValue)
+          }
+
+
+          return new BigNumber(installment.total_amount)
+            .isLessThanOrEqualTo(maxInstallmentValue.minus(maxInstallmentReduction))
         }
 
         const calculatePercentageValue = value => {
@@ -918,11 +1031,22 @@ nodes:
           return disbursementDate
         }
 
+        function calculateTotalAmount() {
+          const totalAmount = qitechInstallment.installments.reduce(
+            (total, installment) => total.plus(installment.total_amount),
+            new BigNumber(0)
+          )
+
+          return totalAmount
+            .decimalPlaces($.ctx.constants.DECIMAL_PLACES)
+            .toNumber();
+        }
+
         $.ctx.offers.push({
           disbursementAmount,
           installmentAmount: allowed ? firstInstallment.total_amount : 0,
           description: allowed ? '' : 'Limite do valor da parcela excedido.',
-          totalAmount: qitechInstallment.issue_amount,
+          totalAmount: calculateTotalAmount(),
           iofAmount: qitechInstallment.iof_amount,
           monthlyCET: calculatePercentageValue(qitechInstallment.cet),
           yearlyCET: calculatePercentageValue(qitechInstallment.annual_cet),
