@@ -1,0 +1,125 @@
+# Inputs:
+# - invoiceStatus: string[]
+# - dateDaysOffset: number
+# - dateOperationDirection: string (after|before)
+# - messageText: string
+
+starterNode: processa_inputs
+nodes:
+  processa_inputs:
+    type: function
+    friendlyName: Processa inputs
+    parameters:
+      code: |
+        const { addDays, subDays, startOfDay, endOfDay } = require('date-fns')
+
+        const currentDate = new Date()
+
+        const dateOperationFn = $.ctx.inputs.dateOperationDirection === 'after' ? addDays : subDays
+        const targetDate = dateOperationFn(currentDate, $.ctx.inputs.dateDaysOffset)
+
+        return {
+          invoiceStatus: $.ctx.inputs.invoiceStatus.join(','),
+          startDate: startOfDay(targetDate),
+          endDate: endOfDay(targetDate),
+        }
+      next: busca_faturas_por_vencimento
+  busca_faturas_por_vencimento:
+    type: http-request
+    friendlyName: Buscar faturas por vencimento
+    parameters:
+      app: internalApi
+      url: /v1/invoices
+      method: get
+      timeout: 30000
+      queryParameters:
+        type: customer_recurring,company_recurring
+        due_date_start: "{{ $.nodes.processa_inputs[0].output.startDate }}"
+        due_date_end: "{{ $.nodes.processa_inputs[0].output.endDate }}"
+        status: "{{ $.nodes.processa_inputs[0].output.invoiceStatus }}"
+        starting_after: '{{ $.nodes."busca_faturas_por_vencimento"[-1].output.body.data[-1].id }}'
+        limit: 100
+        fields: data.id,data.payer
+      next: busca_faturas_por_vencimento-check-pagination
+  busca_faturas_por_vencimento-check-pagination:
+    type: conditional
+    parameters:
+      conditions:
+        - next: busca_faturas_por_vencimento
+          expressions:
+            - leftValue: '{{ $.nodes."busca_faturas_por_vencimento"[-1].output.body.hasMore }}'
+              operation: equal
+              rightValue: true
+      default: envia_sms_por_fatura-loop
+  envia_sms_por_fatura-loop:
+    type: loop
+    friendlyName: Envia sms por fatura
+    parameters:
+      items: "{{ $.nodes.busca_faturas_por_vencimento[*].output.data[] }}"
+      starterNode: envia_sms_fatura_a_vencer
+      concurrency: 5
+  obtem_tipo_pagador_fatura:
+    type: function
+    friendlyName: Obtém tipo pagador fatura
+    parameters:
+      code: |
+        const { payer } = $.flow.loop.item
+
+        const isCustomer = /^cust_/.test(payer)
+
+        return isCustomer ? 'customer' : 'company'
+  verifica_tipo_pagador_fatura:
+    type: conditional
+    friendlyName: Verifica tipo pagador fatura
+    parameters:
+      conditions:
+        - next: busca_dados_cliente
+          expressions:
+            - leftValue: "{{ $.nodes.obtem_tipo_pagador_fatura[0].output }}"
+              operation: equal
+              rightValue: customer
+  busca_dados_cliente:
+    type: http-request
+    friendlyName: Buscar faturas por vencimento
+    parameters:
+      app: internalApi
+      url: "/v1/customers/{{ $.flow.loop.item.payer }}"
+      method: get
+      timeout: 30000
+      fields: id,name,document,email,username,birthDate,phone,address
+      next: cria_dados_template
+  cria_dados_template:
+    type: function
+    friendlyName: Cria dados template
+    parameters:
+      code: |
+        const payerType = $.nodes.obtem_tipo_pagador_fatura[0].output
+
+        let payerData
+        if (payerType === 'customer') {
+          payerData = $.nodes.busca_dados_cliente[0].output.body
+        } else {
+          payerData = {}
+        }
+
+        $.ctx.data = {
+          payer: payerData,
+          invoice: $.flow.loop.item,
+        }
+      next: verifica_email_destinatario
+  verifica_sms_destinatario:
+    type: conditional
+    friendlyName: Verifica sms destinatário
+    parameters:
+      conditions:
+        - next: envia_sms_fatura_a_vencer
+          expressions:
+            - leftValue: "{{ $.ctx.data.payer.phone }}"
+              operation: not-empty
+  envia_sms_fatura_a_vencer:
+    friendlyName: Envia SMS fatura a vencer
+    type: sms
+    parameters:
+      app: settings.notifications.sms
+      to: "{{ $.ctx.data.payer.phone }}"
+      text: "{{ $.ctx.inputs.messageText }}"

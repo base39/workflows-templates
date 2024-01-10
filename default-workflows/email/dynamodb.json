@@ -1,0 +1,17 @@
+{
+  "id": {
+    "S": "dfwf_657b6b52d401d2af10276b3a"
+  },
+  "content": {
+    "S": "yaml/json"
+  },
+  "triggerData": {
+    "S": "{\"cron\":\"0 10 * * *\"}"
+  },
+  "triggerType": {
+    "S": "scheduled"
+  },
+  "type": {
+    "S": "invoice_email_notification"
+  }
+}
