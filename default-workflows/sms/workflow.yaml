@@ -15,7 +15,7 @@ nodes:
 
         const currentDate = new Date()
 
-        const dateOperationFn = $.ctx.inputs.dateOperationDirection === 'after' ? addDays : subDays
+        const dateOperationFn = $.ctx.inputs.dateOperationDirection === 'after' ? subDays : addDays
         const targetDate = dateOperationFn(currentDate, $.ctx.inputs.dateDaysOffset)
 
         return {
@@ -39,7 +39,7 @@ nodes:
         status: "{{ $.nodes.processa_inputs[0].output.invoiceStatus }}"
         starting_after: '{{ $.nodes."busca_faturas_por_vencimento"[-1].output.body.data[-1].id }}'
         limit: 100
-        fields: data.id,data.payer
+        fields: data.id,data.payer,data.status,data.beneficiary,data.dueDate,data.amountDue,data.amountPaid,data.amountRemaining,data.type
       next: busca_faturas_por_vencimento-check-pagination
   busca_faturas_por_vencimento-check-pagination:
     type: conditional
@@ -55,9 +55,9 @@ nodes:
     type: loop
     friendlyName: Envia sms por fatura
     parameters:
-      items: "{{ $.nodes.busca_faturas_por_vencimento[*].output.data[] }}"
-      starterNode: envia_sms_fatura_a_vencer
-      concurrency: 5
+      items: "{{ $.nodes.busca_faturas_por_vencimento[*].output.body.data[] }}"
+      concurrency: 1
+      starterNode: obtem_tipo_pagador_fatura
   obtem_tipo_pagador_fatura:
     type: function
     friendlyName: Obtém tipo pagador fatura
@@ -68,6 +68,7 @@ nodes:
         const isCustomer = /^cust_/.test(payer)
 
         return isCustomer ? 'customer' : 'company'
+      next: verifica_tipo_pagador_fatura
   verifica_tipo_pagador_fatura:
     type: conditional
     friendlyName: Verifica tipo pagador fatura
@@ -75,7 +76,7 @@ nodes:
       conditions:
         - next: busca_dados_cliente
           expressions:
-            - leftValue: "{{ $.nodes.obtem_tipo_pagador_fatura[0].output }}"
+            - leftValue: "{{ $.flow.nodes.obtem_tipo_pagador_fatura[0].output }}"
               operation: equal
               rightValue: customer
   busca_dados_cliente:
@@ -86,27 +87,66 @@ nodes:
       url: "/v1/customers/{{ $.flow.loop.item.payer }}"
       method: get
       timeout: 30000
-      fields: id,name,document,email,username,birthDate,phone,address
-      next: cria_dados_template
-  cria_dados_template:
+      fields: id,name,document,email,username,phone
+      next: data
+  data:
     type: function
     friendlyName: Cria dados template
     parameters:
       code: |
-        const payerType = $.nodes.obtem_tipo_pagador_fatura[0].output
+        const payerType = $.flow.nodes.obtem_tipo_pagador_fatura[0].output;
+        const DEFAULT_TIMEZONE = "America/Sao_Paulo";
 
-        let payerData
-        if (payerType === 'customer') {
-          payerData = $.nodes.busca_dados_cliente[0].output.body
+        const formatDatePtBr = (date, timeZone = DEFAULT_TIMEZONE) => {
+          if (!date) {
+            return ''
+          }
+
+          const formatter = new Intl.DateTimeFormat("pt-BR", {
+            timeZone,
+            dateStyle: "short",
+          });
+
+          return formatter.format(new Date(date));
+        };
+
+        const formatMonetaryValuePtBr = (value, options) => {
+          if (!value) {
+            return '0,00'
+          }
+          
+          const formatter = Intl.NumberFormat(
+            "pt-BR",
+            options ?? {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            }
+          );
+
+          return formatter.format(value);
+        };
+
+        let payerData;
+        if (payerType === "customer") {
+          payerData = $.flow.nodes.busca_dados_cliente[0].output.body;
         } else {
-          payerData = {}
+          payerData = $.flow.nodes.busca_dados_operador[0].output.body?.data[0];
         }
 
-        $.ctx.data = {
+        const templateData = {
           payer: payerData,
-          invoice: $.flow.loop.item,
-        }
-      next: verifica_email_destinatario
+          invoice: {
+            ...$.flow.loop.item,
+            dueDate: formatDatePtBr($.flow.loop.item.dueDate),
+            amountDue: formatMonetaryValuePtBr($.flow.loop.item.amountDue),
+            amountPaid: formatMonetaryValuePtBr($.flow.loop.item.amountPaid),
+            amountRemaining: formatMonetaryValuePtBr($.flow.loop.item.amountRemaining),
+          },
+        };
+
+        $.ctx.data = templateData;
+        return templateData;
+      next: verifica_sms_destinatario
   verifica_sms_destinatario:
     type: conditional
     friendlyName: Verifica sms destinatário
